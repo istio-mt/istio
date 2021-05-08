@@ -522,7 +522,7 @@ func buildGatewayListenerTLSContext(
 
 	ctx := &tls.DownstreamTlsContext{
 		CommonTlsContext: &tls.CommonTlsContext{
-			AlpnProtocols: util.ALPNHttp,
+			AlpnProtocols: util.ALPNHttpOnly,
 		},
 	}
 

@@ -29,6 +29,7 @@ import (
 	hcm "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	auth "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
+	"github.com/golang/protobuf/ptypes/any"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	meshconfig "istio.io/api/mesh/v1alpha1"
@@ -108,6 +109,8 @@ const (
 	// ProxyInboundListenPort is the port on which all inbound traffic to the pod/vm will be captured to
 	// TODO: allow configuration through mesh config
 	ProxyInboundListenPort = 15006
+
+	AlpnProtocolH2 = "h2"
 )
 
 // MutableListener represents a listener that is being built.
@@ -158,7 +161,51 @@ func (configgen *ConfigGeneratorImpl) BuildListeners(node *model.Proxy,
 	}
 
 	builder.patchListeners()
-	return builder.getListeners()
+	listeners := builder.getListeners()
+	if builder.node.Type == model.Router {
+		orderListenerDownstreamTlsContextAlpnProtocols(listeners)
+	}
+	return listeners
+}
+
+func orderListenerDownstreamTlsContextAlpnProtocols(listeners []*listener.Listener) {
+	var tlsContextAny *any.Any
+	var alpnProtocols []string
+	for _, listener := range listeners {
+		for _, filterChain := range listener.FilterChains {
+			if filterChain.TransportSocket != nil {
+				tlsContextAny = filterChain.TransportSocket.GetTypedConfig()
+				if tlsContextAny != nil {
+					var tlsContext auth.DownstreamTlsContext
+					if err := tlsContextAny.UnmarshalTo(&tlsContext); err != nil {
+						log.Error(fmt.Sprintf("error Unmarshal Any %s to DownstreamTlsContext: %v", tlsContextAny.GetTypeUrl(), err))
+						continue
+					}
+					if tlsContext.CommonTlsContext != nil && len(tlsContext.CommonTlsContext.AlpnProtocols) >= 2 {
+						alpnProtocols = tlsContext.CommonTlsContext.AlpnProtocols
+						hasHTTP2 := false
+						for _, alpnProtocol := range alpnProtocols {
+							if alpnProtocol == AlpnProtocolH2 {
+								hasHTTP2 = true
+								break
+							}
+						}
+						if hasHTTP2 {
+							orderedAlpnProtocols := make([]string, 0, len(alpnProtocols))
+							orderedAlpnProtocols = append(orderedAlpnProtocols, AlpnProtocolH2)
+							for _, alpnProtocol := range alpnProtocols {
+								if alpnProtocol != AlpnProtocolH2 {
+									orderedAlpnProtocols = append(orderedAlpnProtocols, alpnProtocol)
+								}
+							}
+							tlsContext.CommonTlsContext.AlpnProtocols = orderedAlpnProtocols
+							filterChain.TransportSocket = buildDownstreamTLSTransportSocket(&tlsContext)
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 // buildSidecarListeners produces a list of listeners for sidecar proxies

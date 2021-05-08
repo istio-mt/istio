@@ -30,20 +30,10 @@ import (
 var defaultRetryPriorityTypedConfig = util.MessageToAny(buildPreviousPrioritiesConfig())
 
 // DefaultPolicy gets a copy of the default retry policy.
+// default set NumRetries to 0 by jst
 func DefaultPolicy() *route.RetryPolicy {
 	policy := route.RetryPolicy{
-		NumRetries:           &wrappers.UInt32Value{Value: 2},
-		RetryOn:              "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes",
-		RetriableStatusCodes: []uint32{http.StatusServiceUnavailable},
-		RetryHostPredicate: []*route.RetryPolicy_RetryHostPredicate{
-			{
-				// to configure retries to prefer hosts that haven’t been attempted already,
-				// the builtin `envoy.retry_host_predicates.previous_hosts` predicate can be used.
-				Name: "envoy.retry_host_predicates.previous_hosts",
-			},
-		},
-		// TODO: allow this to be configured via API.
-		HostSelectionRetryMaxAttempts: 5,
+		NumRetries:           &wrappers.UInt32Value{Value: 0},
 	}
 	return &policy
 }
