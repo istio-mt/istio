@@ -77,8 +77,8 @@ function download_envoy_if_necessary () {
     rm -rf usr
 
     # Make a copy named just "envoy" in the same directory (overwrite if necessary).
-    echo "Copying $2 to $(dirname "$2")/${3}"
-    cp -f "$2" "$(dirname "$2")/${3}"
+    # echo "Copying $2 to $(dirname "$2")/${3}"
+    # cp -f "$2" "$(dirname "$2")/${3}"
     popd
   fi
 }
@@ -124,7 +124,7 @@ fi
 
 # Download and extract the Envoy linux release binary.
 download_envoy_if_necessary "${ISTIO_ENVOY_LINUX_RELEASE_URL}" "$ISTIO_ENVOY_LINUX_RELEASE_PATH" "${SIDECAR}"
-download_envoy_if_necessary "${ISTIO_ENVOY_CENTOS_RELEASE_URL}" "$ISTIO_ENVOY_CENTOS_LINUX_RELEASE_PATH" "${SIDECAR}-centos"
+# download_envoy_if_necessary "${ISTIO_ENVOY_CENTOS_RELEASE_URL}" "$ISTIO_ENVOY_CENTOS_LINUX_RELEASE_PATH" "${SIDECAR}-centos"
 
 if [[ "$GOOS_LOCAL" == "darwin" ]]; then
   # Download and extract the Envoy macOS release binary
@@ -149,8 +149,8 @@ echo "Copying ${ISTIO_ENVOY_NATIVE_PATH} to ${ISTIO_OUT}/${SIDECAR}"
 cp -f "${ISTIO_ENVOY_NATIVE_PATH}" "${ISTIO_OUT}/${SIDECAR}"
 
 # Copy CentOS binary
-echo "Copying ${ISTIO_ENVOY_CENTOS_LINUX_RELEASE_PATH} to ${ISTIO_OUT_LINUX}/${SIDECAR}-centos"
-cp -f "${ISTIO_ENVOY_CENTOS_LINUX_RELEASE_PATH}" "${ISTIO_OUT_LINUX}/${SIDECAR}-centos"
+# echo "Copying ${ISTIO_ENVOY_CENTOS_LINUX_RELEASE_PATH} to ${ISTIO_OUT_LINUX}/${SIDECAR}-centos"
+# cp -f "${ISTIO_ENVOY_CENTOS_LINUX_RELEASE_PATH}" "${ISTIO_OUT_LINUX}/${SIDECAR}-centos"
 
 # Copy the envoy binary to ISTIO_OUT_LINUX if the local OS is not Linux
 if [[ "$GOOS_LOCAL" != "linux" ]]; then
