@@ -145,7 +145,24 @@
           }
         ]
       }
-    }
+    },
+    "histogram_bucket_settings": [
+      {
+        "match": {
+          "safe_regex": {
+            "google_re2": {},
+            "regex": ".*"
+          }
+        },
+        "buckets": [
+          25,
+          50,
+          200,
+          1000,
+          2000
+        ]
+      }
+    ]
   },
   "admin": {
     "access_log_path": "/dev/null",
