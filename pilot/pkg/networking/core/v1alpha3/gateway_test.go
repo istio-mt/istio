@@ -60,7 +60,7 @@ func TestBuildGatewayListenerTlsContext(t *testing.T) {
 			},
 			result: &auth.DownstreamTlsContext{
 				CommonTlsContext: &auth.CommonTlsContext{
-					AlpnProtocols: util.ALPNHttp,
+					AlpnProtocols: util.ALPNHttpOnly,
 					TlsCertificateSdsSecretConfigs: []*auth.SdsSecretConfig{
 						{
 							Name: "default",
@@ -124,7 +124,7 @@ func TestBuildGatewayListenerTlsContext(t *testing.T) {
 			},
 			result: &auth.DownstreamTlsContext{
 				CommonTlsContext: &auth.CommonTlsContext{
-					AlpnProtocols: util.ALPNHttp,
+					AlpnProtocols: util.ALPNHttpOnly,
 					TlsCertificateSdsSecretConfigs: []*auth.SdsSecretConfig{
 						{
 							Name: "default",
@@ -163,7 +163,7 @@ func TestBuildGatewayListenerTlsContext(t *testing.T) {
 			},
 			result: &auth.DownstreamTlsContext{
 				CommonTlsContext: &auth.CommonTlsContext{
-					AlpnProtocols: util.ALPNHttp,
+					AlpnProtocols: util.ALPNHttpOnly,
 					TlsCertificateSdsSecretConfigs: []*auth.SdsSecretConfig{
 						{
 							Name:      "kubernetes://ingress-sds-resource-name",
@@ -187,7 +187,7 @@ func TestBuildGatewayListenerTlsContext(t *testing.T) {
 			},
 			result: &auth.DownstreamTlsContext{
 				CommonTlsContext: &auth.CommonTlsContext{
-					AlpnProtocols: util.ALPNHttp,
+					AlpnProtocols: util.ALPNHttpOnly,
 					TlsCertificateSdsSecretConfigs: []*auth.SdsSecretConfig{
 						{
 							Name:      "kubernetes://ingress-sds-resource-name",
@@ -215,7 +215,7 @@ func TestBuildGatewayListenerTlsContext(t *testing.T) {
 			},
 			result: &auth.DownstreamTlsContext{
 				CommonTlsContext: &auth.CommonTlsContext{
-					AlpnProtocols: util.ALPNHttp,
+					AlpnProtocols: util.ALPNHttpOnly,
 					TlsCertificateSdsSecretConfigs: []*auth.SdsSecretConfig{
 						{
 							Name: "file-cert:server-cert.crt~private-key.key",
@@ -255,7 +255,7 @@ func TestBuildGatewayListenerTlsContext(t *testing.T) {
 			},
 			result: &auth.DownstreamTlsContext{
 				CommonTlsContext: &auth.CommonTlsContext{
-					AlpnProtocols: util.ALPNHttp,
+					AlpnProtocols: util.ALPNHttpOnly,
 					TlsCertificateSdsSecretConfigs: []*auth.SdsSecretConfig{
 						{
 							Name: "file-cert:server-cert.crt~private-key.key",
@@ -321,7 +321,7 @@ func TestBuildGatewayListenerTlsContext(t *testing.T) {
 			},
 			result: &auth.DownstreamTlsContext{
 				CommonTlsContext: &auth.CommonTlsContext{
-					AlpnProtocols: util.ALPNHttp,
+					AlpnProtocols: util.ALPNHttpOnly,
 					TlsCertificateSdsSecretConfigs: []*auth.SdsSecretConfig{
 						{
 							Name: "file-cert:server-cert.crt~private-key.key",
@@ -391,7 +391,7 @@ func TestBuildGatewayListenerTlsContext(t *testing.T) {
 			},
 			result: &auth.DownstreamTlsContext{
 				CommonTlsContext: &auth.CommonTlsContext{
-					AlpnProtocols: util.ALPNHttp,
+					AlpnProtocols: util.ALPNHttpOnly,
 					TlsCertificateSdsSecretConfigs: []*auth.SdsSecretConfig{
 						{
 							Name:      "kubernetes://ingress-sds-resource-name",
@@ -427,7 +427,7 @@ func TestBuildGatewayListenerTlsContext(t *testing.T) {
 			},
 			result: &auth.DownstreamTlsContext{
 				CommonTlsContext: &auth.CommonTlsContext{
-					AlpnProtocols: util.ALPNHttp,
+					AlpnProtocols: util.ALPNHttpOnly,
 					TlsCertificateSdsSecretConfigs: []*auth.SdsSecretConfig{
 						{
 							Name:      "kubernetes://ingress-sds-resource-name",
@@ -463,7 +463,7 @@ func TestBuildGatewayListenerTlsContext(t *testing.T) {
 			},
 			result: &auth.DownstreamTlsContext{
 				CommonTlsContext: &auth.CommonTlsContext{
-					AlpnProtocols: util.ALPNHttp,
+					AlpnProtocols: util.ALPNHttpOnly,
 					TlsCertificateSdsSecretConfigs: []*auth.SdsSecretConfig{
 						{
 							Name:      "kubernetes://ingress-sds-resource-name",

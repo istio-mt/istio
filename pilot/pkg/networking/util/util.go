@@ -124,6 +124,10 @@ var ALPNInMeshWithMxc = []string{"istio-peer-exchange", "istio"}
 // ALPNHttp advertises that Proxy is going to talking either http2 or http 1.1.
 var ALPNHttp = []string{"h2", "http/1.1"}
 
+// ALPNHttpOnly http2 use wildcard certificate will return 404, ref https://github.com/istio/istio/issues/9429
+// so in gateway disable http2 by default
+var ALPNHttpOnly = []string{"http/1.1"}
+
 // ALPNDownstream advertises that Proxy is going to talking either tcp(for metadata exchange), http2 or http 1.1.
 var ALPNDownstream = []string{"istio-peer-exchange", "h2", "http/1.1"}
 
