@@ -2,7 +2,8 @@ FROM ubuntu:bionic
 # Base image for debug builds.
 # Built manually uploaded as "istionightly/base_debug"
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+  TZ=Asia/Shanghai
 
 # Do not add more stuff to this list that isn't small or critically useful.
 # If you occasionally need something on the container do
@@ -25,6 +26,10 @@ RUN apt-get update && \
   lsof \
   linux-tools-generic \
   sudo \
+  tzdata \
+  && ln -fs /usr/share/zoneinfo/${TZ} /etc/localtime \
+  && echo ${TZ} > /etc/timezone \
+  && dpkg-reconfigure --frontend noninteractive tzdata \
   && update-ca-certificates \
   && apt-get upgrade -y \
   && apt-get clean \
