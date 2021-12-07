@@ -4,10 +4,8 @@ ARG BASE_DISTRIBUTION=default
 # Version is the base image version from the TLD Makefile
 ARG BASE_VERSION=latest
 
-ARG BASE_HUB=swr.cn-north-4.myhuaweicloud.com/mesh
-
 # The following section is used as base image if BASE_DISTRIBUTION=default
-FROM ${BASE_HUB}/base:${BASE_VERSION} as default
+FROM gcr.io/istio-release/base:${BASE_VERSION} as default
 
 LABEL description="Istio CNI plugin installer."
 
