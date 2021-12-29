@@ -35,6 +35,7 @@ import (
 	xdstype "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/wellknown"
 	"github.com/golang/protobuf/ptypes"
+	"github.com/golang/protobuf/ptypes/any"
 	"github.com/golang/protobuf/ptypes/wrappers"
 
 	meshconfig "istio.io/api/mesh/v1alpha1"
@@ -117,6 +118,8 @@ const (
 	ProxyInboundListenPort = 15006
 
 	ThriftRLSDefaultTimeoutMS = 50
+
+	AlpnProtocolH2 = "h2"
 )
 
 type FilterChainMatchOptions struct {
@@ -247,7 +250,51 @@ func (configgen *ConfigGeneratorImpl) BuildListeners(node *model.Proxy,
 	}
 
 	builder.patchListeners()
-	return builder.getListeners()
+	listeners := builder.getListeners()
+	if builder.node.Type == model.Router {
+		orderListenerDownstreamTlsContextAlpnProtocols(listeners)
+	}
+	return listeners
+}
+
+func orderListenerDownstreamTlsContextAlpnProtocols(listeners []*listener.Listener) {
+	var tlsContextAny *any.Any
+	var alpnProtocols []string
+	for _, listener := range listeners {
+		for _, filterChain := range listener.FilterChains {
+			if filterChain.TransportSocket != nil {
+				tlsContextAny = filterChain.TransportSocket.GetTypedConfig()
+				if tlsContextAny != nil {
+					var tlsContext auth.DownstreamTlsContext
+					if err := tlsContextAny.UnmarshalTo(&tlsContext); err != nil {
+						log.Error(fmt.Sprintf("error Unmarshal Any %s to DownstreamTlsContext: %v", tlsContextAny.GetTypeUrl(), err))
+						continue
+					}
+					if tlsContext.CommonTlsContext != nil && len(tlsContext.CommonTlsContext.AlpnProtocols) >= 2 {
+						alpnProtocols = tlsContext.CommonTlsContext.AlpnProtocols
+						hasHTTP2 := false
+						for _, alpnProtocol := range alpnProtocols {
+							if alpnProtocol == AlpnProtocolH2 {
+								hasHTTP2 = true
+								break
+							}
+						}
+						if hasHTTP2 {
+							orderedAlpnProtocols := make([]string, 0, len(alpnProtocols))
+							orderedAlpnProtocols = append(orderedAlpnProtocols, AlpnProtocolH2)
+							for _, alpnProtocol := range alpnProtocols {
+								if alpnProtocol != AlpnProtocolH2 {
+									orderedAlpnProtocols = append(orderedAlpnProtocols, alpnProtocol)
+								}
+							}
+							tlsContext.CommonTlsContext.AlpnProtocols = orderedAlpnProtocols
+							filterChain.TransportSocket = buildDownstreamTLSTransportSocket(&tlsContext)
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 // buildSidecarListeners produces a list of listeners for sidecar proxies
