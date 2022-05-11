@@ -110,3 +110,6 @@ require (
 	sigs.k8s.io/mcs-api v0.1.0
 	sigs.k8s.io/yaml v1.2.0
 )
+
+// add slow start proto support, branch mt-1.9.9
+replace github.com/envoyproxy/go-control-plane => github.com/istio-mt/go-control-plane v0.9.9-0.20220510090233-9a835672a6b3
