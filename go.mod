@@ -120,5 +120,5 @@ require (
 // Pending https://github.com/kubernetes/kube-openapi/pull/220
 replace k8s.io/kube-openapi => github.com/howardjohn/kube-openapi v0.0.0-20210104181841-c0b40d2cb1c8
 
-// add slow start proto support
-replace github.com/envoyproxy/go-control-plane => github.com/istio-mt/go-control-plane v0.9.9-0.20220117070332-d83c9739a664
+// add slow start proto support, branch mt-1.9.9
+replace github.com/envoyproxy/go-control-plane => github.com/istio-mt/go-control-plane v0.9.9-0.20220510090233-9a835672a6b3
