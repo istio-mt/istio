@@ -113,3 +113,6 @@ require (
 
 // add slow start proto support, branch mt-1.9.9
 replace github.com/envoyproxy/go-control-plane => github.com/istio-mt/go-control-plane v0.9.9-0.20220510090233-9a835672a6b3
+
+// add mt_ext_proc proto config, branch mt-1.10.6
+replace istio.io/api => gitlab.meitu.com/istio-mt/api v0.0.0-20230925015357-581df05d8a91
