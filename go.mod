@@ -124,4 +124,4 @@ replace k8s.io/kube-openapi => github.com/howardjohn/kube-openapi v0.0.0-2021010
 replace github.com/envoyproxy/go-control-plane => github.com/istio-mt/go-control-plane v0.9.9-0.20220510090233-9a835672a6b3
 
 // add mt_ext_proc proto config, branch mt-1.9.9
-replace istio.io/api => gitlab.meitu.com/istio-mt/api v0.0.0-20230614062518-5ce9d521023d
+replace istio.io/api => gitlab.meitu.com/istio-mt/api v0.0.0-20230801024409-8f372c3c8e5a
