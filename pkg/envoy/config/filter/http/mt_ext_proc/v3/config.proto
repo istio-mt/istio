@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+import "google/protobuf/duration.proto";
+import "google/api/field_behavior.proto";
+
+package istio.envoy.config.filter.http.mt_ext_proc.v3;
+
+option go_package = "istio.io/api/envoy/config/filter/http/mt_ext_proc/v3";
+
+// [#protodoc-title: External Processing For Meitu]
+// External Processing For Meitu :ref:`configuration overview <config_http_filters_mt_ext_proc>`.
+// [#extension: envoy.filters.http.mt_ext_proc]
+
+// [#next-free-field: 6]
+message MtExtProc {
+  // External processing http service configuration.
+  HttpService http_service = 1 [(google.api.field_behavior) = REQUIRED];
+
+  // Sets the HTTP status that is returned to the client when there is a network error between the
+  // filter and the processing server. The default status is HTTP 500 Internal Server Error.
+  uint64 status_on_error = 2;
+
+  // Optional additional prefix to use when emitting statistics. This allows to distinguish
+  // emitted statistics between configured *mt_ext_proc* filters in an HTTP filter chain. For example:
+  //
+  // .. code-block:: yaml
+  //
+  //   http_filters:
+  //     - name: envoy.filters.http.mt_ext_proc
+  //       typed_config:
+  //         "@type": type.googleapis.com/envoy.extensions.filters.http.mt_ext_proc.v3.MtExtProc
+  //         stat_prefix: waf # This emits mt_ext_proc.waf.ok, mt_ext_proc.waf.denied, etc.
+  //     - name: envoy.filters.http.mt_ext_proc
+  //       typed_config:
+  //         "@type": type.googleapis.com/envoy.extensions.filters.http.mt_ext_proc.v3.MtExtProc
+  //         stat_prefix: blocker # This emits mt_ext_proc.blocker.ok, mt_ext_proc.blocker.denied, etc.
+  //
+  string stat_prefix = 3;
+
+  // Config for decode filter
+  RequestConfig request = 4;
+
+  // Config for encode filter
+  ResponseConfig response = 5;
+}
+
+// HttpService is used for raw HTTP communication between the filter and the processing service.
+// When configured, the filter will parse the client request and use these attributes to call the
+// processing server. Depending on the response, the filter may reject or accept the client
+// request. Note that in any of these events, metadata can be added, removed or overridden by the
+// filter:
+//
+// [#next-free-field: 2]
+message HttpService {
+  // Sets the HTTP server URI which the processing requests must be sent to.
+  HttpUri server_uri = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+// Copied from @envoy/api/envoy/api/v2/core/http_uri.proto
+// Envoy external URI descriptor
+message HttpUri {
+  // The HTTP server URI. It should be a full FQDN with protocol, host and path.
+  //
+  // Example:
+  //
+  // .. code-block:: yaml
+  //
+  //    uri: https://www.googleapis.com/oauth2/v1/certs
+  //
+  string uri = 1;
+
+  // Specify how `uri` is to be fetched. Today, this requires an explicit
+  // cluster, but in the future we may support dynamic cluster creation or
+  // inline DNS resolution. See `issue
+  // <https://github.com/envoyproxy/envoy/issues/1606>`_.
+  oneof http_upstream_type {
+    // A cluster is created in the Envoy "cluster_manager" config
+    // section. This field specifies the cluster name.
+    //
+    // Example:
+    //
+    // .. code-block:: yaml
+    //
+    //    cluster: jwks_cluster
+    //
+    string cluster = 2;
+  }
+
+  // Sets the maximum duration in milliseconds that a response can take to arrive upon request.
+  google.protobuf.Duration timeout = 3;
+}
+
+message RequestConfig {
+  // Config for request signature
+  SignatureConfig signature = 1;
+
+  // Config for request decrypt
+  DecryptConfig decrypt = 2;
+
+  // config for buffering body for failover
+  BufferSettings buffer = 3;
+}
+
+message SignatureConfig {
+  // Enable the filter for signature verifying.
+  bool enabled = 1;
+
+  //  Changes filter's behaviour on errors:
+  //
+  //  1. When set to true, the filter will *accept* client request even if the communication with
+  //  the processing service has failed, or if the processing service has returned a HTTP 5xx
+  //  error.
+  //
+  //  2. When set to false, ext-proc will *reject* client requests and return a *Forbidden*
+  //  response if the communication with the processing service has failed, or if the
+  //  processing service has returned a HTTP 5xx error.
+  //
+  // Note that errors can be *always* tracked in the :ref:`stats
+  // <config_http_filters_mt_ext_proc_stats>`.
+  bool failure_mode_allow = 2;
+
+  // Sets the maximum duration in milliseconds that a response can take to arrive upon request.
+  // default: 500ms
+  google.protobuf.Duration timeout = 3;
+}
+
+message DecryptConfig {
+  // Sets the maximum duration in milliseconds that a response can take to arrive upon request.
+  // default: 2000ms
+  google.protobuf.Duration timeout = 1;
+}
+
+// Configuration for buffering the request data.
+message BufferSettings {
+  // Sets the maximum size of a message body that the filter will hold in memory.
+  // Envoy will *not* initiate the external process when buffer reaches the number
+  // set in this field if condition is ok, and will proxy the request to upstream directly.
+  uint32 max_request_bytes = 2;
+}
+
+message ResponseConfig {
+}
+
+// Extra settings on a per virtualhost/route/weighted-cluster level.
+message MtExtProcPerRoute {
+  RequestConfigPerRoute request = 1;
+}
+
+message RequestConfigPerRoute {
+  SignatureConfigPerRoute signature = 1;
+}
+
+message SignatureConfigPerRoute {
+  // Disable the ext proc filter for this particular vhost or route.
+  // If disabled is specified in multiple per-filter-configs, the most specific one will be used.
+  bool disabled = 1;
+}
