@@ -20,6 +20,7 @@ import (
 	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
+	preservecaseformater "github.com/envoyproxy/go-control-plane/envoy/extensions/http/header_formatters/preserve_case/v3"
 	auth "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	http "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	"github.com/gogo/protobuf/types"
@@ -66,11 +67,27 @@ var h2UpgradeMap = map[upgradeTuple]bool{
 var passthroughHttpProtocolOptions = util.MessageToAny(&http.HttpProtocolOptions{
 	UpstreamProtocolOptions: &http.HttpProtocolOptions_UseDownstreamProtocolConfig{
 		UseDownstreamProtocolConfig: &http.HttpProtocolOptions_UseDownstreamHttpConfig{
-			HttpProtocolOptions:  &core.Http1ProtocolOptions{},
+			HttpProtocolOptions: &core.Http1ProtocolOptions{
+				// TODO(@jst)：此处为了确保所有的 Cluster HTTP1 协议都支持 HeaderKeyFormat，所以在此处设置了默认值
+				HeaderKeyFormat: defaultHttp1HeaserKeyFormat,
+			},
 			Http2ProtocolOptions: http2ProtocolOptions(),
 		},
 	},
 })
+
+// defaultHttp1HeaserKeyFormat TODO(@jst)：此处为了确保所有的 Cluster HTTP1 协议都支持 HeaderKeyFormat，所以在此处设置了默认值
+// 最合适的地方是在 [BuildClusters](https://github.com/istio-mt/istio/blob/cfe3d8f182a2a7596500676ea5ae5024446c8fcf/pilot/pkg/networking/core/v1alpha3/cluster.go#L77) 中反解析出 `TypedExtensionProtocolOptions`，然后设置默认值，这样确保不会有遗漏，但是这样会导致性能很差，每次都需要经历多次的 any.Any 类型的 Marshal 和 Unmarshal，因此暂时先通过代码层面覆盖来提升性能
+var defaultHttp1HeaserKeyFormat = &core.Http1ProtocolOptions_HeaderKeyFormat{
+	HeaderFormat: &core.Http1ProtocolOptions_HeaderKeyFormat_StatefulFormatter{
+		StatefulFormatter: &core.TypedExtensionConfig{
+			Name: "preserve_case",
+			TypedConfig: util.MessageToAny(&preservecaseformater.PreserveCaseFormatterConfig{
+				FormatterTypeOnEnvoyHeaders: preservecaseformater.PreserveCaseFormatterConfig_PROPER_CASE,
+			}),
+		},
+	},
+}
 
 // MutableCluster wraps Cluster object along with options.
 type MutableCluster struct {
@@ -888,7 +905,10 @@ func (cb *ClusterBuilder) setUseDownstreamProtocol(mc *MutableCluster) {
 	options := mc.httpProtocolOptions
 	options.UpstreamProtocolOptions = &http.HttpProtocolOptions_UseDownstreamProtocolConfig{
 		UseDownstreamProtocolConfig: &http.HttpProtocolOptions_UseDownstreamHttpConfig{
-			HttpProtocolOptions:  &core.Http1ProtocolOptions{},
+			HttpProtocolOptions: &core.Http1ProtocolOptions{
+				// TODO(@jst)：此处为了确保所有的 Cluster HTTP1 协议都支持 HeaderKeyFormat，所以在此处设置了默认值
+				HeaderKeyFormat: defaultHttp1HeaserKeyFormat,
+			},
 			Http2ProtocolOptions: http2ProtocolOptions(),
 		},
 	}
@@ -949,6 +969,10 @@ func (mc *MutableCluster) build() *cluster.Cluster {
 	if mc == nil {
 		return nil
 	}
+	// TODO(@jst)：此处为了确保所有的 Cluster HTTP1 协议都支持 HeaderKeyFormat，所以在此处设置了默认值
+	if mc.httpProtocolOptions == nil {
+		mc.httpProtocolOptions = &http.HttpProtocolOptions{}
+	}
 	// Marshall Http Protocol options if they exist.
 	if mc.httpProtocolOptions != nil {
 		// UpstreamProtocolOptions is required field in Envoy. If we have not set this option earlier
@@ -956,7 +980,12 @@ func (mc *MutableCluster) build() *cluster.Cluster {
 		if mc.httpProtocolOptions.UpstreamProtocolOptions == nil {
 			mc.httpProtocolOptions.UpstreamProtocolOptions = &http.HttpProtocolOptions_ExplicitHttpConfig_{
 				ExplicitHttpConfig: &http.HttpProtocolOptions_ExplicitHttpConfig{
-					ProtocolConfig: &http.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{},
+					ProtocolConfig: &http.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{
+						HttpProtocolOptions: &core.Http1ProtocolOptions{
+							// TODO(@jst)：此处为了确保所有的 Cluster HTTP1 协议都支持 HeaderKeyFormat，所以在此处设置了默认值
+							HeaderKeyFormat: defaultHttp1HeaserKeyFormat,
+						},
+					},
 				},
 			}
 		}

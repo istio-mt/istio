@@ -25,6 +25,8 @@ import (
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	tls "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
+	http "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
+	"github.com/golang/protobuf/ptypes/any"
 	"github.com/golang/protobuf/ptypes/duration"
 	structpb "github.com/golang/protobuf/ptypes/struct"
 	"github.com/golang/protobuf/ptypes/wrappers"
@@ -38,6 +40,7 @@ import (
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/networking/util"
 	authn_model "istio.io/istio/pilot/pkg/security/model"
+	v3 "istio.io/istio/pilot/pkg/xds/v3"
 	"istio.io/istio/pilot/test/xdstest"
 	"istio.io/istio/pkg/config"
 	"istio.io/istio/pkg/config/constants"
@@ -655,6 +658,19 @@ func TestBuildDefaultCluster(t *testing.T) {
 				CircuitBreakers: &cluster.CircuitBreakers{
 					Thresholds: []*cluster.CircuitBreakers_Thresholds{getDefaultCircuitBreakerThresholds()},
 				},
+				TypedExtensionProtocolOptions: map[string]*any.Any{
+					v3.HttpProtocolOptionsType: util.MessageToAny(&http.HttpProtocolOptions{
+						UpstreamProtocolOptions: &http.HttpProtocolOptions_ExplicitHttpConfig_{
+							ExplicitHttpConfig: &http.HttpProtocolOptions_ExplicitHttpConfig{
+								ProtocolConfig: &http.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{
+									HttpProtocolOptions: &core.Http1ProtocolOptions{
+										HeaderKeyFormat: defaultHttp1HeaserKeyFormat,
+									},
+								},
+							},
+						},
+					}),
+				},
 				Metadata: &core.Metadata{
 					FilterMetadata: map[string]*structpb.Struct{
 						util.IstioMetadataKey: {
@@ -750,6 +766,19 @@ func TestBuildDefaultCluster(t *testing.T) {
 				},
 				CircuitBreakers: &cluster.CircuitBreakers{
 					Thresholds: []*cluster.CircuitBreakers_Thresholds{getDefaultCircuitBreakerThresholds()},
+				},
+				TypedExtensionProtocolOptions: map[string]*any.Any{
+					v3.HttpProtocolOptionsType: util.MessageToAny(&http.HttpProtocolOptions{
+						UpstreamProtocolOptions: &http.HttpProtocolOptions_ExplicitHttpConfig_{
+							ExplicitHttpConfig: &http.HttpProtocolOptions_ExplicitHttpConfig{
+								ProtocolConfig: &http.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{
+									HttpProtocolOptions: &core.Http1ProtocolOptions{
+										HeaderKeyFormat: defaultHttp1HeaserKeyFormat,
+									},
+								},
+							},
+						},
+					}),
 				},
 				Metadata: &core.Metadata{
 					FilterMetadata: map[string]*structpb.Struct{
