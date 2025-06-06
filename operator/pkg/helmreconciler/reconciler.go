@@ -44,6 +44,7 @@ import (
 	"istio.io/istio/operator/pkg/util/clog"
 	"istio.io/istio/operator/pkg/util/progress"
 	"istio.io/istio/pkg/config/constants"
+	"istio.io/istio/pkg/kube"
 	"istio.io/pkg/version"
 )
 
@@ -51,7 +52,7 @@ import (
 type HelmReconciler struct {
 	client     client.Client
 	restConfig *rest.Config
-	clientSet  *kubernetes.Clientset
+	clientSet  kube.Client
 	iop        *valuesv1alpha1.IstioOperator
 	opts       *Options
 	// copy of the last generated manifests.
@@ -114,10 +115,10 @@ func NewHelmReconciler(client client.Client, restConfig *rest.Config, iop *value
 		iop = &valuesv1alpha1.IstioOperator{}
 		iop.Spec = &v1alpha1.IstioOperatorSpec{}
 	}
-	var cs *kubernetes.Clientset
+	var cs kube.Client
 	var err error
 	if restConfig != nil {
-		cs, err = kubernetes.NewForConfig(restConfig)
+		cs, err = kube.NewExtendedClient(kube.NewClientConfigForRestConfig(restConfig), iop.Spec.Revision)
 	}
 	if err != nil {
 		return nil, err

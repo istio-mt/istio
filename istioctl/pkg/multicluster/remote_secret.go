@@ -303,7 +303,7 @@ func getOrCreateServiceAccount(client kube.ExtendedClient, opt RemoteSecretOptio
 
 func createServiceAccount(client kube.ExtendedClient, opt RemoteSecretOptions) error {
 	// Create a renderer for the base installation.
-	r := helm.NewHelmRenderer(opt.ManifestsPath, "base", "Base", opt.Namespace)
+	r := helm.NewHelmRenderer(opt.ManifestsPath, "base", "Base", opt.Namespace, nil)
 
 	if err := r.Run(); err != nil {
 		return fmt.Errorf("failed running Helm renderer: %v", err)

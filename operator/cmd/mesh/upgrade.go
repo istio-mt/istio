@@ -248,8 +248,11 @@ func upgrade(rootArgs *rootArgs, args *upgradeArgs, l clog.Logger) (err error) {
 			l.LogAndPrint("Control plane health check is not applicable for upgrade in dry-run mode")
 		} else {
 			l.LogAndPrint("\n\nVerifying installation after upgrade:")
-			installationVerifier := verifier.NewStatusVerifier(iop.Namespace, args.manifestsPath, args.kubeConfigPath,
+			installationVerifier, err := verifier.NewStatusVerifier(iop.Namespace, args.manifestsPath, args.kubeConfigPath,
 				args.context, args.inFilenames, clioptions.ControlPlaneOptions{Revision: iop.Spec.Revision}, l, iop)
+			if err != nil {
+				return fmt.Errorf("failed to create installation status verifier, error: %v", err)
+			}
 			if err := installationVerifier.Verify(); err != nil {
 				return fmt.Errorf("verification failed with the following error: %v", err)
 			}
