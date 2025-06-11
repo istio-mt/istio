@@ -63,8 +63,15 @@ func GenManifests(inFilename []string, setFlags []string, force bool,
 	}
 
 	t := translate.NewTranslator()
-
-	cp, err := controlplane.NewIstioControlPlane(mergedIOPS.Spec, t)
+	client, err := kube.NewExtendedClient(kube.NewClientConfigForRestConfig(kubeConfig), "")
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create NewExtendedClient: %v", err)
+	}
+	ver, err := client.GetKubernetesVersion()
+	if err != nil {
+		return nil, nil, err
+	}
+	cp, err := controlplane.NewIstioControlPlane(mergedIOPS.Spec, t, ver)
 	if err != nil {
 		return nil, nil, err
 	}

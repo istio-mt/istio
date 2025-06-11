@@ -23,6 +23,7 @@ import (
 	"fmt"
 
 	"github.com/ghodss/yaml"
+	"k8s.io/apimachinery/pkg/version"
 
 	"istio.io/api/operator/v1alpha1"
 	"istio.io/istio/operator/pkg/helm"
@@ -51,6 +52,8 @@ type Options struct {
 	Translator *translate.Translator
 	// Namespace is the namespace for this component.
 	Namespace string
+	// Version is the Kubernetes version information.Add commentMore actions
+	Version *version.Info
 }
 
 // IstioComponent defines the interface for a component.
@@ -474,7 +477,7 @@ func createHelmRenderer(c *CommonComponentFields) helm.TemplateRenderer {
 	iop := c.InstallSpec
 	cns := string(c.ComponentName)
 	helmSubdir := c.Translator.ComponentMap(cns).HelmSubdir
-	return helm.NewHelmRenderer(iop.InstallPackagePath, helmSubdir, cns, c.Namespace)
+	return helm.NewHelmRenderer(iop.InstallPackagePath, helmSubdir, cns, c.Namespace, c.Version)
 }
 
 func isCoreComponentEnabled(c *CommonComponentFields) bool {

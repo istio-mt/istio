@@ -209,8 +209,11 @@ func runApplyCmd(cmd *cobra.Command, rootArgs *rootArgs, iArgs *installArgs, log
 			return nil
 		}
 		l.LogAndPrint("\n\nVerifying installation:")
-		installationVerifier := verifier.NewStatusVerifier(iop.Namespace, iArgs.manifestsPath, iArgs.kubeConfigPath,
+		installationVerifier, err := verifier.NewStatusVerifier(iop.Namespace, iArgs.manifestsPath, iArgs.kubeConfigPath,
 			iArgs.context, iArgs.inFilenames, clioptions.ControlPlaneOptions{Revision: iop.Spec.Revision}, l, iop)
+		if err != nil {
+			return fmt.Errorf("failed to create installation status verifier: %v", err)
+		}
 		if err := installationVerifier.Verify(); err != nil {
 			return fmt.Errorf("verification failed with the following error: %v", err)
 		}
@@ -226,8 +229,10 @@ func runApplyCmd(cmd *cobra.Command, rootArgs *rootArgs, iArgs *installArgs, log
 
 // InstallManifests generates manifests from the given istiooperator instance and applies them to the
 // cluster. See GenManifests for more description of the manifest generation process.
-//  force   validation warnings are written to logger but command is not aborted
-//  dryRun  all operations are done but nothing is written
+//
+//	force   validation warnings are written to logger but command is not aborted
+//	dryRun  all operations are done but nothing is written
+//
 // Returns final IstioOperator after installation if successful.
 func InstallManifests(iop *v1alpha12.IstioOperator, force bool, dryRun bool, restConfig *rest.Config, client client.Client,
 	waitTimeout time.Duration, l clog.Logger) (*v1alpha12.IstioOperator, error) {
@@ -406,7 +411,7 @@ func createIstiodService(cs kubernetes.Interface, istioNs string) error {
 		pilotDiscoveryChart = "istio-control/istio-discovery"
 		serviceTemplateName = "service.yaml"
 	)
-	r := helm.NewHelmRenderer("", pilotDiscoveryChart, "Pilot", istioNs)
+	r := helm.NewHelmRenderer("", pilotDiscoveryChart, "Pilot", istioNs, nil)
 
 	if err := r.Run(); err != nil {
 		return fmt.Errorf("failed running Helm renderer: %v", err)

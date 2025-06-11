@@ -243,6 +243,20 @@ func (t *Translator) OverlayK8sSettings(yml string, iop *v1alpha1.IstioOperatorS
 			continue
 		}
 
+		// When autoscale is enabled we should not overwrite replica count, consider following scenario:
+		// 0. Set values.pilot.autoscaleEnabled=true, components.pilot.k8s.replicaCount=1
+		// 1. In istio operator it "caches" the generated manifests (with istiod.replicas=1)
+		// 2. HPA autoscales our pilot replicas to 3
+		// 3. Set values.pilot.autoscaleEnabled=false
+		// 4. The generated manifests (with istiod.replicas=1) is same as istio operator "cache",
+		//    the deployment will not get updated unless istio operator is restarted.
+		inPathParts := strings.Split(inPath, ".")
+		if inPathParts[len(inPathParts)-1] == "ReplicaCount" {
+			if skipReplicaCountWithAutoscaleEnabled(iop, componentName) {
+				continue
+			}
+		}
+
 		// strategic merge overlay m to the base object oo
 		mergedObj, err := MergeK8sObject(oo, m, path[1:])
 		if err != nil {
@@ -253,6 +267,27 @@ func (t *Translator) OverlayK8sSettings(yml string, iop *v1alpha1.IstioOperatorS
 	}
 
 	return objects.YAMLManifest()
+}
+
+var componentToAutoScaleEnabledPath = map[name.ComponentName]string{
+	name.PilotComponentName:   "Values.pilot.autoscaleEnabled",
+	name.IngressComponentName: "Values.gateways.istio-ingressgateway.autoscaleEnabled",
+	name.EgressComponentName:  "Values.gateways.istio-egressgateway.autoscaleEnabled",
+}
+
+func skipReplicaCountWithAutoscaleEnabled(iop *v1alpha1.IstioOperatorSpec, componentName name.ComponentName) bool {
+	path, ok := componentToAutoScaleEnabledPath[componentName]
+	if !ok {
+		return false
+	}
+
+	enabledVal, found, err := tpath.GetFromStructPath(iop, path)
+	if err != nil || !found {
+		return false
+	}
+
+	enabled, ok := enabledVal.(bool)
+	return ok && enabled
 }
 
 // ProtoToValues traverses the supplied IstioOperatorSpec and returns a values.yaml translation from it.
@@ -788,7 +823,7 @@ apiVersion: install.istio.io/v1alpha1
 kind: IstioOperator
 metadata:
   namespace: {{ .Namespace }}
-  name: {{ .Name }} 
+  name: {{ .Name }}
 `
 	// Passing into template causes reformatting, use simple concatenation instead.
 	tmpl += spec

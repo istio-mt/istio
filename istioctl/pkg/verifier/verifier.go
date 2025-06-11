@@ -64,6 +64,7 @@ type StatusVerifier struct {
 	iop              *v1alpha1.IstioOperator
 	successMarker    string
 	failureMarker    string
+	client           kube.ExtendedClient
 }
 
 // NewStatusVerifier creates a new instance of post-install verifier
@@ -71,9 +72,13 @@ type StatusVerifier struct {
 // TODO(su225): This is doing too many things. Refactor: break it down
 func NewStatusVerifier(istioNamespace, manifestsPath, kubeconfig, context string,
 	filenames []string, controlPlaneOpts clioptions.ControlPlaneOptions,
-	logger clog.Logger, installedIOP *v1alpha1.IstioOperator) *StatusVerifier {
+	logger clog.Logger, installedIOP *v1alpha1.IstioOperator) (*StatusVerifier, error) {
 	if logger == nil {
 		logger = clog.NewDefaultLogger()
+	}
+	client, err := kube.NewExtendedClient(kube.BuildClientCmd(kubeconfig, context), controlPlaneOpts.Revision)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect Kubernetes API server, error: %v", err)
 	}
 	return &StatusVerifier{
 		istioNamespace:   istioNamespace,
@@ -86,7 +91,8 @@ func NewStatusVerifier(istioNamespace, manifestsPath, kubeconfig, context string
 		iop:              installedIOP,
 		successMarker:    "✔",
 		failureMarker:    "✘",
-	}
+		client:           client,
+	}, nil
 }
 
 func (v *StatusVerifier) Colorize() {
@@ -213,8 +219,11 @@ func (v *StatusVerifier) verifyInstall() error {
 
 func (v *StatusVerifier) verifyPostInstallIstioOperator(iop *v1alpha1.IstioOperator, filename string) (int, int, error) {
 	t := translate.NewTranslator()
-
-	cp, err := controlplane.NewIstioControlPlane(iop.Spec, t)
+	ver, err := v.client.GetKubernetesVersion()
+	if err != nil {
+		return 0, 0, err
+	}
+	cp, err := controlplane.NewIstioControlPlane(iop.Spec, t, ver)
 	if err != nil {
 		return 0, 0, err
 	}
