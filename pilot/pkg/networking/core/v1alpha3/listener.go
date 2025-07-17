@@ -162,8 +162,13 @@ func (configgen *ConfigGeneratorImpl) BuildListeners(node *model.Proxy,
 
 	builder.patchListeners()
 	listeners := builder.getListeners()
-	if builder.node.Type == model.Router {
+	if node.Type == model.Router {
+		// tlsContext.CommonTlsContext.AlpnProtocols 进行排序
+		// https://cf.meitu.com/confluence/pages/viewpage.action?pageId=242753632
 		orderListenerDownstreamTlsContextAlpnProtocols(listeners)
+		// 对 listeners.ListenerFilters 进行去重和排序
+		// https://cf.meitu.com/confluence/pages/viewpage.action?pageId=591448683
+		orderListenerFilter(listeners)
 	}
 	return listeners
 }
@@ -205,6 +210,30 @@ func orderListenerDownstreamTlsContextAlpnProtocols(listeners []*listener.Listen
 				}
 			}
 		}
+	}
+}
+
+func orderListenerFilter(listeners []*listener.Listener) {
+	for _, l := range listeners {
+		listenerFilterMap := make(map[string]bool)
+		var orderedListenerFilters []*listener.ListenerFilter
+		// Step 1: Find and add `proxy_protocol` if it exists
+		for _, filter := range l.ListenerFilters {
+			if filter.Name == wellknown.ProxyProtocol {
+				orderedListenerFilters = append(orderedListenerFilters, filter)
+				listenerFilterMap[filter.Name] = true
+				break
+			}
+		}
+		// Step 2: Add remaining filters ensuring no duplicates and preserving order
+		for _, filter := range l.ListenerFilters {
+			if !listenerFilterMap[filter.Name] {
+				orderedListenerFilters = append(orderedListenerFilters, filter)
+				listenerFilterMap[filter.Name] = true
+			}
+		}
+		// Update the ListenerFilters with the new ordered and deduplicated list
+		l.ListenerFilters = orderedListenerFilters
 	}
 }
 
