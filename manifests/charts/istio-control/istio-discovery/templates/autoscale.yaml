@@ -17,6 +17,13 @@ metadata:
 spec:
   maxReplicas: {{ .Values.pilot.autoscaleMax }}
   minReplicas: {{ .Values.pilot.autoscaleMin }}
+  # 控制缩容的步长，每隔 3min 缩容一个节点
+  behavior:
+    scaleDown:
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 180
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
