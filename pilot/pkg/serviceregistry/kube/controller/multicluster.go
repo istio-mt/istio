@@ -315,10 +315,65 @@ func (m *Multicluster) AddMemberCluster(clusterID string, rc *secretcontroller.C
 }
 
 func (m *Multicluster) UpdateMemberCluster(clusterID string, rc *secretcontroller.Cluster) error {
-	if err := m.DeleteMemberCluster(clusterID); err != nil {
-		return err
+	m.m.Lock()
+
+	if m.closing {
+		m.m.Unlock()
+		return fmt.Errorf("failed updating member cluster %s: server shutting down", clusterID)
 	}
-	return m.AddMemberCluster(clusterID, rc)
+
+	oldKc, exists := m.remoteKubeControllers[clusterID]
+	if !exists {
+		m.m.Unlock()
+		return m.AddMemberCluster(clusterID, rc)
+	}
+
+	client := rc.Client
+	clusterStopCh := rc.Stop
+
+	options := m.opts
+	options.ClusterID = clusterID
+	options.SyncTimeout = rc.SyncTimeout
+
+	log.Infof("Updating Kubernetes service registry %q (make-before-break)", options.ClusterID)
+	newKubeRegistry := NewController(client, options)
+
+	// Phase 1 (make): atomically replace the registry in the aggregate controller
+	m.serviceController.UpdateRegistry(clusterID, serviceregistry.Kubernetes, newKubeRegistry)
+	m.remoteKubeControllers[clusterID] = &kubeController{
+		Controller: newKubeRegistry,
+	}
+
+	m.m.Unlock()
+
+	newKubeRegistry.AppendServiceHandler(func(svc *model.Service, ev model.Event) { m.updateHandler(svc) })
+
+	if m.serviceEntryStore != nil && features.EnableServiceEntrySelectPods {
+		newKubeRegistry.AppendWorkloadHandler(m.serviceEntryStore.WorkloadInstanceHandler)
+	}
+
+	// TODO: update path 暂不处理 leader election、webhook cert patching、service export controller，
+	// 这些由 feature flag 控制的次要功能不会导致配置丢失的灾难性 bug。
+
+	if m.serviceController.Running() {
+		go newKubeRegistry.Run(clusterStopCh)
+	}
+
+	// Phase 3 (break): 等待新集群同步完成后，再清理旧集群
+	go func() {
+		<-rc.SyncedCh
+		if err := oldKc.Cleanup(); err != nil {
+			log.Warnf("failed cleaning up old services in %s: %v", clusterID, err)
+		}
+		if oldKc.workloadEntryStore != nil {
+			m.serviceController.DeleteRegistry(clusterID, serviceregistry.External)
+		}
+		if m.XDSUpdater != nil {
+			m.XDSUpdater.ConfigUpdate(&model.PushRequest{Full: true})
+		}
+	}()
+
+	return nil
 }
 
 // DeleteMemberCluster is passed to the secret controller as a callback to be called

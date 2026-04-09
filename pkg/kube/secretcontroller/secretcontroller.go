@@ -92,15 +92,27 @@ type Cluster struct {
 	// Stop channel which is closed when the cluster is removed or the secretcontroller that created the client is stopped.
 	// Client.RunAndWait is called using this channel.
 	Stop chan struct{}
+	// SyncedCh is closed when the cluster's initial sync (Run) completes or exits.
+	// Used by make-before-break logic to wait for the new cluster to be ready before cleaning up the old one.
+	SyncedCh chan struct{}
 	// initialSync is marked when RunAndWait completes
 	initialSync *atomic.Bool
 	// SyncTimeout is marked after features.RemoteClusterTimeout
 	SyncTimeout *atomic.Bool
+
+	syncedOnce sync.Once
+}
+
+func (r *Cluster) closeSyncedCh() {
+	r.syncedOnce.Do(func() {
+		close(r.SyncedCh)
+	})
 }
 
 // Run starts the cluster's informers and waits for caches to sync. Once caches are synced, we mark the cluster synced.
 // This should be called after each of the handlers have registered informers, and should be run in a goroutine.
 func (r *Cluster) Run() {
+	defer r.closeSyncedCh()
 	r.Client.RunAndWait(r.Stop)
 	r.initialSync.Store(true)
 }
@@ -146,6 +158,32 @@ func (c *ClusterStore) Len() int {
 	c.Lock()
 	defer c.Unlock()
 	return len(c.remoteClusters)
+}
+
+// Swap atomically replaces the cluster entry and returns a PendingClusterSwap
+// to manage the lifecycle of the old cluster.
+func (c *ClusterStore) Swap(key string, value *Cluster) *PendingClusterSwap {
+	c.Lock()
+	defer c.Unlock()
+	old := c.remoteClusters[key]
+	c.remoteClusters[key] = value
+	return &PendingClusterSwap{Old: old, New: value}
+}
+
+// PendingClusterSwap tracks an in-progress cluster replacement for make-before-break.
+// Call Complete() to close the old cluster's Stop channel after the new cluster is ready.
+type PendingClusterSwap struct {
+	Old  *Cluster
+	New  *Cluster
+	once sync.Once
+}
+
+func (s *PendingClusterSwap) Complete() {
+	s.once.Do(func() {
+		if s.Old != nil {
+			close(s.Old.Stop)
+		}
+	})
 }
 
 // NewController returns a new secret controller
@@ -373,7 +411,8 @@ func (c *Controller) createRemoteCluster(kubeConfig []byte, secretName string) (
 		secretName: secretName,
 		Client:     clients,
 		// access outside this package should only be reading
-		Stop: make(chan struct{}),
+		Stop:     make(chan struct{}),
+		SyncedCh: make(chan struct{}),
 		// for use inside the package, to close on cleanup
 		initialSync:   atomic.NewBool(false),
 		SyncTimeout:   &c.remoteSyncTimeout,
@@ -384,8 +423,10 @@ func (c *Controller) createRemoteCluster(kubeConfig []byte, secretName string) (
 func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
 	for clusterID, kubeConfig := range s.Data {
 		action, callback := "Adding", c.addCallback
+		isUpdate := false
 		if prev, ok := c.cs.Get(clusterID); ok {
 			action, callback = "Updating", c.updateCallback
+			isUpdate = true
 			// clusterID must be unique even across multiple secrets
 			if prev.secretName != secretName {
 				log.Errorf("ClusterID reused in two different secrets: %v and %v. ClusterID "+
@@ -405,12 +446,27 @@ func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
 			log.Errorf("%s cluster_id=%v from secret=%v: %v", action, clusterID, secretName, err)
 			continue
 		}
-		c.cs.Store(clusterID, remoteCluster)
-		if err := callback(clusterID, remoteCluster); err != nil {
-			log.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err)
-			continue
+
+		if isUpdate {
+			swap := c.cs.Swap(clusterID, remoteCluster)
+			if err := callback(clusterID, remoteCluster); err != nil {
+				log.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err)
+				c.cs.Store(clusterID, swap.Old)
+				close(remoteCluster.Stop)
+				continue
+			}
+			go func() {
+				remoteCluster.Run()
+				swap.Complete()
+			}()
+		} else {
+			c.cs.Store(clusterID, remoteCluster)
+			if err := callback(clusterID, remoteCluster); err != nil {
+				log.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err)
+				continue
+			}
+			go remoteCluster.Run()
 		}
-		go remoteCluster.Run()
 	}
 
 	log.Infof("Number of remote clusters: %d", c.cs.Len())

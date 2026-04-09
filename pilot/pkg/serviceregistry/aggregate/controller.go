@@ -84,6 +84,19 @@ func (c *Controller) DeleteRegistry(clusterID string, providerID serviceregistry
 	log.Infof("Registry for the cluster %s has been deleted.", clusterID)
 }
 
+func (c *Controller) UpdateRegistry(clusterID string, providerID serviceregistry.ProviderID, newRegistry serviceregistry.Instance) {
+	c.storeLock.Lock()
+	defer c.storeLock.Unlock()
+
+	if index, ok := c.getRegistryIndex(clusterID, providerID); ok {
+		c.registries[index] = newRegistry
+		log.Infof("Registry for the cluster %s has been updated.", clusterID)
+	} else {
+		c.registries = append(c.registries, newRegistry)
+		log.Infof("Registry for the cluster %s was not found, adding as new.", clusterID)
+	}
+}
+
 // GetRegistries returns a copy of all registries
 func (c *Controller) GetRegistries() []serviceregistry.Instance {
 	c.storeLock.RLock()
@@ -304,10 +317,10 @@ func (c *Controller) AppendWorkloadHandler(f func(*model.WorkloadInstance, model
 // To retain such trust domain expansion behavior, the xDS server implementation should wrap any (even if single)
 // service registry by this aggreated one.
 // For example,
-// - { "spiffe://cluster.local/bar@iam.gserviceaccount.com"}; when annotation is used on corresponding workloads.
-// - { "spiffe://cluster.local/ns/default/sa/foo" }; normal kubernetes cases
-// - { "spiffe://cluster.local/ns/default/sa/foo", "spiffe://trust-domain-alias/ns/default/sa/foo" };
-//   if the trust domain alias is configured.
+//   - { "spiffe://cluster.local/bar@iam.gserviceaccount.com"}; when annotation is used on corresponding workloads.
+//   - { "spiffe://cluster.local/ns/default/sa/foo" }; normal kubernetes cases
+//   - { "spiffe://cluster.local/ns/default/sa/foo", "spiffe://trust-domain-alias/ns/default/sa/foo" };
+//     if the trust domain alias is configured.
 func (c *Controller) GetIstioServiceAccounts(svc *model.Service, ports []int) []string {
 	out := map[string]struct{}{}
 	for _, r := range c.GetRegistries() {
