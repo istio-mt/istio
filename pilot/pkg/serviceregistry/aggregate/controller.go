@@ -84,6 +84,29 @@ func (c *Controller) DeleteRegistry(clusterID string, providerID serviceregistry
 	log.Infof("Registry for the cluster %s has been deleted.", clusterID)
 }
 
+// ReplaceRegistry atomically replaces an existing registry with a new one.
+// If no existing registry is found, the new registry is appended.
+// Returns the old registry if replaced, nil otherwise.
+func (c *Controller) ReplaceRegistry(newRegistry serviceregistry.Instance) serviceregistry.Instance {
+	c.storeLock.Lock()
+	defer c.storeLock.Unlock()
+
+	clusterID := newRegistry.Cluster()
+	providerID := newRegistry.Provider()
+
+	if index, ok := c.getRegistryIndex(clusterID, providerID); ok {
+		old := c.registries[index]
+		c.registries[index] = newRegistry
+		log.Infof("Registry for cluster %s has been replaced.", clusterID)
+		return old
+	}
+
+	// 如果旧 registry 不存在，当作 add 处理
+	c.registries = append(c.registries, newRegistry)
+	log.Infof("Registry for cluster %s has been added (no previous registry found).", clusterID)
+	return nil
+}
+
 // GetRegistries returns a copy of all registries
 func (c *Controller) GetRegistries() []serviceregistry.Instance {
 	c.storeLock.RLock()

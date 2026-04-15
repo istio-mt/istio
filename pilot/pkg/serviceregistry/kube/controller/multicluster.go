@@ -169,13 +169,17 @@ func (m *Multicluster) close() (err error) {
 // when a remote cluster is added.  This function needs to set up all the handlers
 // to watch for resources being added, deleted or changed on remote clusters.
 func (m *Multicluster) AddMemberCluster(clusterID string, rc *secretcontroller.Cluster) error {
-	m.m.Lock()
+	return m.addOrUpdateMemberCluster(clusterID, rc)
+}
 
-	if m.closing {
-		m.m.Unlock()
-		return fmt.Errorf("failed adding member cluster %s: server shutting down", clusterID)
-	}
+func (m *Multicluster) UpdateMemberCluster(clusterID string, rc *secretcontroller.Cluster) error {
+	return m.addOrUpdateMemberCluster(clusterID, rc)
+}
 
+// addOrUpdateMemberCluster handles both add and update scenarios for a member cluster.
+// For add: registers a new registry in the aggregate controller.
+// For update (Make-Before-Break): atomically replaces the old registry, then cleans up old resources.
+func (m *Multicluster) addOrUpdateMemberCluster(clusterID string, rc *secretcontroller.Cluster) error {
 	client := rc.Client
 	clusterStopCh := rc.Stop
 
@@ -187,15 +191,36 @@ func (m *Multicluster) AddMemberCluster(clusterID string, rc *secretcontroller.C
 
 	log.Infof("Initializing Kubernetes service registry %q", options.ClusterID)
 	kubeRegistry := NewController(client, options)
-	m.serviceController.AddRegistry(kubeRegistry)
-	m.remoteKubeControllers[clusterID] = &kubeController{
+
+	newKc := &kubeController{
 		Controller: kubeRegistry,
 	}
 	// localCluster may also be the "config" cluster, in an external-istiod setup.
 	localCluster := m.opts.ClusterID == clusterID
 
+	// ========== Register/Replace in aggregate controller (inside lock) ==========
+	m.m.Lock()
+
+	if m.closing {
+		m.m.Unlock()
+		return fmt.Errorf("failed adding member cluster %s: server shutting down", clusterID)
+	}
+
+	// Check if this is an update (old controller exists)
+	oldKc, isUpdate := m.remoteKubeControllers[clusterID]
+
+	if isUpdate {
+		// Atomically replace in aggregate controller to avoid any gap
+		m.serviceController.ReplaceRegistry(kubeRegistry)
+	} else {
+		m.serviceController.AddRegistry(kubeRegistry)
+	}
+
+	m.remoteKubeControllers[clusterID] = newKc
+
 	m.m.Unlock()
 
+	// ========== Register handlers (outside lock) ==========
 	// Only need to add service handler for kubernetes registry as `initRegistryEventHandlers`,
 	// because when endpoints update `XDSUpdater.EDSUpdate` has already been called.
 	kubeRegistry.AppendServiceHandler(func(svc *model.Service, ev model.Event) { m.updateHandler(svc) })
@@ -214,12 +239,17 @@ func (m *Multicluster) AddMemberCluster(clusterID string, rc *secretcontroller.C
 		} else if features.WorkloadEntryCrossCluster {
 			// TODO only do this for non-remotes, can't guarantee CRDs in remotes (depends on https://github.com/istio/istio/pull/29824)
 			if configStore, err := createConfigStore(client, m.revision, options); err == nil {
-				m.remoteKubeControllers[clusterID].workloadEntryStore = serviceentry.NewServiceDiscovery(
+				workloadEntryStore := serviceentry.NewServiceDiscovery(
 					configStore, model.MakeIstioStore(configStore), options.XDSUpdater,
 					serviceentry.DisableServiceEntryProcessing(), serviceentry.WithClusterID(clusterID))
-				m.serviceController.AddRegistry(m.remoteKubeControllers[clusterID].workloadEntryStore)
+				newKc.workloadEntryStore = workloadEntryStore
+				if isUpdate && oldKc.workloadEntryStore != nil {
+					m.serviceController.ReplaceRegistry(workloadEntryStore)
+				} else {
+					m.serviceController.AddRegistry(workloadEntryStore)
+				}
 				// Services can select WorkloadEntry from the same cluster. We only duplicate the Service to configure kube-dns.
-				m.remoteKubeControllers[clusterID].workloadEntryStore.AppendWorkloadHandler(kubeRegistry.WorkloadInstanceHandler)
+				workloadEntryStore.AppendWorkloadHandler(kubeRegistry.WorkloadInstanceHandler)
 				go configStore.Run(clusterStopCh)
 			} else {
 				return fmt.Errorf("failed creating config configStore for cluster %s: %v", clusterID, err)
@@ -311,14 +341,22 @@ func (m *Multicluster) AddMemberCluster(clusterID string, rc *secretcontroller.C
 		})
 	}
 
-	return nil
-}
-
-func (m *Multicluster) UpdateMemberCluster(clusterID string, rc *secretcontroller.Cluster) error {
-	if err := m.DeleteMemberCluster(clusterID); err != nil {
-		return err
+	// ========== Clean up old controller if this is an update ==========
+	if isUpdate {
+		if err := oldKc.Cleanup(); err != nil {
+			log.Warnf("failed cleaning up old services in %s: %v", clusterID, err)
+		}
+		if oldKc.workloadEntryStore != nil && newKc.workloadEntryStore == nil {
+			// Old had workloadEntryStore but new doesn't — remove it from aggregate
+			m.serviceController.DeleteRegistry(clusterID, serviceregistry.External)
+		}
+		// Trigger a full config update to ensure XDS pushes the latest state
+		if m.XDSUpdater != nil {
+			m.XDSUpdater.ConfigUpdate(&model.PushRequest{Full: true})
+		}
 	}
-	return m.AddMemberCluster(clusterID, rc)
+
+	return nil
 }
 
 // DeleteMemberCluster is passed to the secret controller as a callback to be called
