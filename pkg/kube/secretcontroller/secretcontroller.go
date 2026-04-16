@@ -473,11 +473,12 @@ func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
 			close(oldCluster.Stop)
 		} else {
 			// ===== Add scenario: keep original logic =====
-			c.cs.Store(clusterID, remoteCluster)
 			if err := callback(clusterID, remoteCluster); err != nil {
 				log.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err)
+				close(remoteCluster.Stop)
 				continue
 			}
+			c.cs.Store(clusterID, remoteCluster)
 			go remoteCluster.Run()
 		}
 	}

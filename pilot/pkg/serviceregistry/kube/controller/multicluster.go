@@ -180,6 +180,13 @@ func (m *Multicluster) UpdateMemberCluster(clusterID string, rc *secretcontrolle
 // For add: registers a new registry in the aggregate controller.
 // For update (Make-Before-Break): atomically replaces the old registry, then cleans up old resources.
 func (m *Multicluster) addOrUpdateMemberCluster(clusterID string, rc *secretcontroller.Cluster) error {
+	m.m.Lock()
+	defer m.m.Unlock()
+
+	if m.closing {
+		return fmt.Errorf("failed addOrUpdateMemberCluster %s: server shutting down", clusterID)
+	}
+
 	client := rc.Client
 	clusterStopCh := rc.Stop
 
@@ -191,40 +198,16 @@ func (m *Multicluster) addOrUpdateMemberCluster(clusterID string, rc *secretcont
 
 	log.Infof("Initializing Kubernetes service registry %q", options.ClusterID)
 	kubeRegistry := NewController(client, options)
-
 	newKc := &kubeController{
 		Controller: kubeRegistry,
 	}
 	// localCluster may also be the "config" cluster, in an external-istiod setup.
 	localCluster := m.opts.ClusterID == clusterID
-
-	// ========== Register/Replace in aggregate controller (inside lock) ==========
-	m.m.Lock()
-
-	if m.closing {
-		m.m.Unlock()
-		return fmt.Errorf("failed adding member cluster %s: server shutting down", clusterID)
-	}
-
 	// Check if this is an update (old controller exists)
 	oldKc, isUpdate := m.remoteKubeControllers[clusterID]
-
-	if isUpdate {
-		// Atomically replace in aggregate controller to avoid any gap
-		m.serviceController.ReplaceRegistry(kubeRegistry)
-	} else {
-		m.serviceController.AddRegistry(kubeRegistry)
-	}
-
-	m.remoteKubeControllers[clusterID] = newKc
-
-	m.m.Unlock()
-
-	// ========== Register handlers (outside lock) ==========
 	// Only need to add service handler for kubernetes registry as `initRegistryEventHandlers`,
 	// because when endpoints update `XDSUpdater.EDSUpdate` has already been called.
 	kubeRegistry.AppendServiceHandler(func(svc *model.Service, ev model.Event) { m.updateHandler(svc) })
-
 	// TODO move instance cache out of registries
 	if m.serviceEntryStore != nil && features.EnableServiceEntrySelectPods {
 		// Add an instance handler in the kubernetes registry to notify service entry store about pod events
@@ -243,11 +226,6 @@ func (m *Multicluster) addOrUpdateMemberCluster(clusterID string, rc *secretcont
 					configStore, model.MakeIstioStore(configStore), options.XDSUpdater,
 					serviceentry.DisableServiceEntryProcessing(), serviceentry.WithClusterID(clusterID))
 				newKc.workloadEntryStore = workloadEntryStore
-				if isUpdate && oldKc.workloadEntryStore != nil {
-					m.serviceController.ReplaceRegistry(workloadEntryStore)
-				} else {
-					m.serviceController.AddRegistry(workloadEntryStore)
-				}
 				// Services can select WorkloadEntry from the same cluster. We only duplicate the Service to configure kube-dns.
 				workloadEntryStore.AppendWorkloadHandler(kubeRegistry.WorkloadInstanceHandler)
 				go configStore.Run(clusterStopCh)
@@ -341,6 +319,14 @@ func (m *Multicluster) addOrUpdateMemberCluster(clusterID string, rc *secretcont
 		})
 	}
 
+	// Atomically replace in aggregate controller to avoid any gap
+	m.serviceController.ReplaceRegistry(kubeRegistry)
+	m.remoteKubeControllers[clusterID] = newKc
+	if newKc.workloadEntryStore != nil {
+		// TODO workloadEntryStore Cluster() 返回空字符串，因此 workloadEntryStore 只会存在一个实例，而且无法删除，因为指定的 clusterID 并非空字符串
+		m.serviceController.ReplaceRegistry(newKc.workloadEntryStore)
+	}
+
 	// ========== Clean up old controller if this is an update ==========
 	if isUpdate {
 		if err := oldKc.Cleanup(); err != nil {
@@ -348,6 +334,7 @@ func (m *Multicluster) addOrUpdateMemberCluster(clusterID string, rc *secretcont
 		}
 		if oldKc.workloadEntryStore != nil && newKc.workloadEntryStore == nil {
 			// Old had workloadEntryStore but new doesn't — remove it from aggregate
+			// TODO workloadEntryStore Cluster() 返回空字符串，无法删除，因为指定的 clusterID 并非空字符串
 			m.serviceController.DeleteRegistry(clusterID, serviceregistry.External)
 		}
 		// Trigger a full config update to ensure XDS pushes the latest state

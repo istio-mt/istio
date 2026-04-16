@@ -86,8 +86,7 @@ func (c *Controller) DeleteRegistry(clusterID string, providerID serviceregistry
 
 // ReplaceRegistry atomically replaces an existing registry with a new one.
 // If no existing registry is found, the new registry is appended.
-// Returns the old registry if replaced, nil otherwise.
-func (c *Controller) ReplaceRegistry(newRegistry serviceregistry.Instance) serviceregistry.Instance {
+func (c *Controller) ReplaceRegistry(newRegistry serviceregistry.Instance) {
 	c.storeLock.Lock()
 	defer c.storeLock.Unlock()
 
@@ -95,16 +94,13 @@ func (c *Controller) ReplaceRegistry(newRegistry serviceregistry.Instance) servi
 	providerID := newRegistry.Provider()
 
 	if index, ok := c.getRegistryIndex(clusterID, providerID); ok {
-		old := c.registries[index]
 		c.registries[index] = newRegistry
 		log.Infof("Registry for cluster %s has been replaced.", clusterID)
-		return old
+		return
 	}
-
 	// 如果旧 registry 不存在，当作 add 处理
 	c.registries = append(c.registries, newRegistry)
 	log.Infof("Registry for cluster %s has been added (no previous registry found).", clusterID)
-	return nil
 }
 
 // GetRegistries returns a copy of all registries
@@ -327,10 +323,10 @@ func (c *Controller) AppendWorkloadHandler(f func(*model.WorkloadInstance, model
 // To retain such trust domain expansion behavior, the xDS server implementation should wrap any (even if single)
 // service registry by this aggreated one.
 // For example,
-// - { "spiffe://cluster.local/bar@iam.gserviceaccount.com"}; when annotation is used on corresponding workloads.
-// - { "spiffe://cluster.local/ns/default/sa/foo" }; normal kubernetes cases
-// - { "spiffe://cluster.local/ns/default/sa/foo", "spiffe://trust-domain-alias/ns/default/sa/foo" };
-//   if the trust domain alias is configured.
+//   - { "spiffe://cluster.local/bar@iam.gserviceaccount.com"}; when annotation is used on corresponding workloads.
+//   - { "spiffe://cluster.local/ns/default/sa/foo" }; normal kubernetes cases
+//   - { "spiffe://cluster.local/ns/default/sa/foo", "spiffe://trust-domain-alias/ns/default/sa/foo" };
+//     if the trust domain alias is configured.
 func (c *Controller) GetIstioServiceAccounts(svc *model.Service, ports []int) []string {
 	out := map[string]struct{}{}
 	for _, r := range c.GetRegistries() {
