@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashicorp/go-multierror"
 	"go.uber.org/atomic"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,7 +46,7 @@ import (
 const (
 	initialSyncSignal       = "INIT"
 	MultiClusterSecretLabel = "istio/multiCluster"
-	maxRetries              = 5
+	maxRetries              = 100
 )
 
 func init() {
@@ -332,7 +333,9 @@ func (c *Controller) processItem(secretName string) error {
 	}
 
 	if exists {
-		c.addMemberCluster(secretName, obj.(*corev1.Secret))
+		if err := c.addMemberCluster(secretName, obj.(*corev1.Secret)); err != nil {
+			return err
+		}
 	} else {
 		c.deleteMemberCluster(secretName)
 	}
@@ -389,7 +392,8 @@ func (c *Controller) createRemoteCluster(kubeConfig []byte, secretName string) (
 	}, nil
 }
 
-func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
+func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) error {
+	errs := &multierror.Error{}
 	for clusterID, kubeConfig := range s.Data {
 		action, callback := "Adding", c.addCallback
 		var oldCluster *Cluster
@@ -399,6 +403,7 @@ func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
 			if prev.secretName != secretName {
 				log.Errorf("ClusterID reused in two different secrets: %v and %v. ClusterID "+
 					"must be unique across all secrets", prev.secretName, secretName)
+				errs = multierror.Append(errs, fmt.Errorf("ClusterID reused in two different secrets: %v and %v", prev.secretName, secretName))
 				continue
 			}
 			kubeConfigSha := sha256.Sum256(kubeConfig)
@@ -413,6 +418,7 @@ func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
 		remoteCluster, err := c.createRemoteCluster(kubeConfig, secretName)
 		if err != nil {
 			log.Errorf("%s cluster_id=%v from secret=%v: %v", action, clusterID, secretName, err)
+			errs = multierror.Append(errs, fmt.Errorf("%s cluster_id=%v from secret=%v: %v", action, clusterID, secretName, err))
 			continue
 		}
 
@@ -456,6 +462,7 @@ func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
 			if !synced {
 				log.Errorf("New cluster %v failed to sync within %v, skipping update", clusterID, updateSyncTimeout)
 				close(remoteCluster.Stop) // Clean up new cluster resources to prevent goroutine leak
+				errs = multierror.Append(errs, fmt.Errorf("new cluster %v failed to sync within %v", clusterID, updateSyncTimeout))
 				continue
 			}
 			log.Infof("New cluster %v synced, proceeding with replacement", clusterID)
@@ -464,6 +471,7 @@ func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
 			if err := callback(clusterID, remoteCluster); err != nil {
 				log.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err)
 				close(remoteCluster.Stop) // Callback failed, clean up new cluster resources
+				errs = multierror.Append(errs, fmt.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err))
 				continue
 			}
 			c.cs.Store(clusterID, remoteCluster)
@@ -476,6 +484,7 @@ func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
 			if err := callback(clusterID, remoteCluster); err != nil {
 				log.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err)
 				close(remoteCluster.Stop)
+				errs = multierror.Append(errs, fmt.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err))
 				continue
 			}
 			c.cs.Store(clusterID, remoteCluster)
@@ -484,6 +493,7 @@ func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
 	}
 
 	log.Infof("Number of remote clusters: %d", c.cs.Len())
+	return errs.ErrorOrNil()
 }
 
 func (c *Controller) deleteMemberCluster(secretName string) {
