@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashicorp/go-multierror"
 	"go.uber.org/atomic"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,7 +46,7 @@ import (
 const (
 	initialSyncSignal       = "INIT"
 	MultiClusterSecretLabel = "istio/multiCluster"
-	maxRetries              = 5
+	maxRetries              = 100
 )
 
 func init() {
@@ -332,7 +333,9 @@ func (c *Controller) processItem(secretName string) error {
 	}
 
 	if exists {
-		c.addMemberCluster(secretName, obj.(*corev1.Secret))
+		if err := c.addMemberCluster(secretName, obj.(*corev1.Secret)); err != nil {
+			return err
+		}
 	} else {
 		c.deleteMemberCluster(secretName)
 	}
@@ -369,6 +372,14 @@ func (c *Controller) createRemoteCluster(kubeConfig []byte, secretName string) (
 	if err != nil {
 		return nil, err
 	}
+
+	// Probe the API server to verify connectivity and certificate validity before proceeding.
+	// This is a lightweight call that validates TLS handshake and authentication configuration,
+	// failing fast instead of waiting for Informer sync to surface connection issues.
+	if _, err := clients.Kube().Discovery().ServerVersion(); err != nil {
+		return nil, fmt.Errorf("failed to connect to API server for secret %s: %v", secretName, err)
+	}
+
 	return &Cluster{
 		secretName: secretName,
 		Client:     clients,
@@ -381,15 +392,18 @@ func (c *Controller) createRemoteCluster(kubeConfig []byte, secretName string) (
 	}, nil
 }
 
-func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
+func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) error {
+	errs := &multierror.Error{}
 	for clusterID, kubeConfig := range s.Data {
 		action, callback := "Adding", c.addCallback
+		var oldCluster *Cluster
 		if prev, ok := c.cs.Get(clusterID); ok {
 			action, callback = "Updating", c.updateCallback
 			// clusterID must be unique even across multiple secrets
 			if prev.secretName != secretName {
 				log.Errorf("ClusterID reused in two different secrets: %v and %v. ClusterID "+
 					"must be unique across all secrets", prev.secretName, secretName)
+				errs = multierror.Append(errs, fmt.Errorf("ClusterID reused in two different secrets: %v and %v", prev.secretName, secretName))
 				continue
 			}
 			kubeConfigSha := sha256.Sum256(kubeConfig)
@@ -397,23 +411,89 @@ func (c *Controller) addMemberCluster(secretName string, s *corev1.Secret) {
 				log.Infof("%s cluster_id=%v from secret=%v: (kubeconfig are identical)", clusterID, secretName)
 				continue
 			}
+			oldCluster = prev
 		}
 		log.Infof("%s cluster %v from secret %v", action, clusterID, secretName)
 
 		remoteCluster, err := c.createRemoteCluster(kubeConfig, secretName)
 		if err != nil {
 			log.Errorf("%s cluster_id=%v from secret=%v: %v", action, clusterID, secretName, err)
+			errs = multierror.Append(errs, fmt.Errorf("%s cluster_id=%v from secret=%v: %v", action, clusterID, secretName, err))
 			continue
 		}
-		c.cs.Store(clusterID, remoteCluster)
-		if err := callback(clusterID, remoteCluster); err != nil {
-			log.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err)
-			continue
+
+		if oldCluster != nil {
+			// ===== Update scenario: Make-Before-Break =====
+			// Phase 1: Start the new cluster's Informer sync first
+			go remoteCluster.Run()
+
+			// Phase 2: Wait for the new cluster to sync with a hard timeout.
+			// We use an independent timeout (1 minute) instead of relying on the global remoteSyncTimeout,
+			// because the global timeout is shared across all clusters and may have already fired,
+			// causing HasSynced() to return true immediately without actual sync completion.
+			log.Infof("Waiting for new cluster %v to sync before replacing old cluster", clusterID)
+
+			// Guard: ensure syncInterval has a reasonable value to avoid hot-polling
+			interval := c.syncInterval
+			if interval <= 0 {
+				interval = 100 * time.Millisecond
+			}
+
+			const updateSyncTimeout = 1 * time.Minute
+			timeoutCh := make(chan struct{})
+			timeoutTimer := time.AfterFunc(updateSyncTimeout, func() {
+				close(timeoutCh)
+			})
+
+			// Wait until either: initialSync completes, timeout fires, or remoteCluster.Stop is closed
+			synced := false
+			syncDone := make(chan bool, 1)
+			go func() {
+				syncDone <- kube.WaitForCacheSyncInterval(remoteCluster.Stop, interval, remoteCluster.initialSync.Load)
+			}()
+
+			select {
+			case synced = <-syncDone:
+				timeoutTimer.Stop()
+			case <-timeoutCh:
+				// Timeout fired — stop waiting
+			}
+
+			if !synced {
+				log.Errorf("New cluster %v failed to sync within %v, skipping update", clusterID, updateSyncTimeout)
+				close(remoteCluster.Stop) // Clean up new cluster resources to prevent goroutine leak
+				errs = multierror.Append(errs, fmt.Errorf("new cluster %v failed to sync within %v", clusterID, updateSyncTimeout))
+				continue
+			}
+			log.Infof("New cluster %v synced, proceeding with replacement", clusterID)
+
+			// Phase 3: Execute callback first, then update ClusterStore (state consistency)
+			if err := callback(clusterID, remoteCluster); err != nil {
+				log.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err)
+				close(remoteCluster.Stop) // Callback failed, clean up new cluster resources
+				errs = multierror.Append(errs, fmt.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err))
+				continue
+			}
+			c.cs.Store(clusterID, remoteCluster)
+
+			// Phase 4: Close old cluster resources
+			log.Infof("Closing old cluster client for cluster_id=%v", clusterID)
+			close(oldCluster.Stop)
+		} else {
+			// ===== Add scenario: keep original logic =====
+			if err := callback(clusterID, remoteCluster); err != nil {
+				log.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err)
+				close(remoteCluster.Stop)
+				errs = multierror.Append(errs, fmt.Errorf("%s cluster_id from secret=%v: %s %v", action, clusterID, secretName, err))
+				continue
+			}
+			c.cs.Store(clusterID, remoteCluster)
+			go remoteCluster.Run()
 		}
-		go remoteCluster.Run()
 	}
 
 	log.Infof("Number of remote clusters: %d", c.cs.Len())
+	return errs.ErrorOrNil()
 }
 
 func (c *Controller) deleteMemberCluster(secretName string) {

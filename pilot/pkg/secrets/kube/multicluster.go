@@ -68,8 +68,11 @@ func (m *Multicluster) addMemberCluster(clients kube.Client, key string) {
 }
 
 func (m *Multicluster) updateMemberCluster(clients kube.Client, key string) {
-	m.deleteMemberCluster(key)
-	m.addMemberCluster(clients, key)
+	log.Infof("updating Kubernetes credential reader for cluster %v", key)
+	sc := NewSecretsController(clients, key)
+	m.m.Lock()
+	m.remoteKubeControllers[key] = sc // Directly replace, no need to delete first
+	m.m.Unlock()
 }
 
 func (m *Multicluster) deleteMemberCluster(key string) {
