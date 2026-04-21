@@ -103,7 +103,7 @@ spec:
               port: 8080
             ## 为了防止 handler 未处理完成就被 ready，导致配置下发不完整，这里给一个初始缓冲窗口时间
             ## ref https://cf.meitu.com/confluence/pages/viewpage.action?pageId=614942153
-            initialDelaySeconds: 120
+            initialDelaySeconds: 180
             periodSeconds: 10
             timeoutSeconds: 5
           env:

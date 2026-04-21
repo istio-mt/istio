@@ -239,6 +239,10 @@ func (m *Multicluster) addOrUpdateMemberCluster(clusterID string, rc *secretcont
 	if m.serviceController.Running() {
 		// if serviceController isn't running, it will start its members when it is started
 		go kubeRegistry.Run(clusterStopCh)
+		// TODO 当前 k8s client 版本不支持 Handler HasSynced 无法得知 handler 是否完成，因此为了防止处理耗时，这里等待 15s，后续可以改成 Handler HasSynced 来替代
+		// ref https://cf.meitu.com/confluence/pages/viewpage.action?pageId=614942153
+		log.Infof("waiting 15s for kube registry handler sync for cluster %s", clusterID)
+		time.Sleep(15 * time.Second)
 	}
 
 	// TODO only create namespace controller and cert patch for remote clusters (no way to tell currently)
