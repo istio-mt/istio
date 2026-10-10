@@ -125,13 +125,14 @@ func (cb *ClusterBuilder) applyDestinationRule(mc *MutableCluster, clusterMode C
 	destinationRule := castDestinationRuleOrDefault(destRule)
 
 	opts := buildClusterOpts{
-		mesh:        cb.push.Mesh,
-		mutable:     mc,
-		policy:      destinationRule.TrafficPolicy,
-		port:        port,
-		clusterMode: clusterMode,
-		direction:   model.TrafficDirectionOutbound,
-		proxy:       cb.proxy,
+		mesh:            cb.push.Mesh,
+		mutable:         mc,
+		policy:          destinationRule.TrafficPolicy,
+		port:            port,
+		clusterMode:     clusterMode,
+		direction:       model.TrafficDirectionOutbound,
+		proxy:           cb.proxy,
+		serviceRegistry: service.Attributes.ServiceRegistry,
 	}
 
 	if clusterMode == DefaultClusterMode {
@@ -606,7 +607,7 @@ func (cb *ClusterBuilder) applyTrafficPolicy(opts buildClusterOpts) {
 	cb.applyConnectionPool(opts.mesh, opts.mutable, connectionPool)
 	if opts.direction != model.TrafficDirectionInbound {
 		cb.applyH2Upgrade(opts, connectionPool)
-		applyOutlierDetection(opts.mutable.cluster, outlierDetection)
+		applyOutlierDetection(opts, outlierDetection)
 		applyLoadBalancer(opts.mutable.cluster, loadBalancer, opts.port, opts.proxy, opts.mesh)
 	}
 	if opts.mutable.cluster.GetType() == cluster.Cluster_ORIGINAL_DST {

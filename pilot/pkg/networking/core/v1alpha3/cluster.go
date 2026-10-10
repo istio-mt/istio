@@ -23,6 +23,7 @@ import (
 	core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	xdstype "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"github.com/gogo/protobuf/types"
 	structpb "github.com/golang/protobuf/ptypes/struct"
 	"github.com/golang/protobuf/ptypes/wrappers"
 
@@ -490,6 +491,9 @@ type buildClusterOpts struct {
 	proxy           *model.Proxy
 	meshExternal    bool
 	serviceMTLSMode model.MutualTLSMode
+	// serviceRegistry 是 Service 的注册来源。Gateway 默认摘除只作用于 Kubernetes Service，
+	// 避免把 ServiceEntry 等外部或自定义来源一并纳入。
+	serviceRegistry string
 }
 
 type upgradeTuple struct {
@@ -533,8 +537,14 @@ func setKeepAliveSettings(cluster *cluster.Cluster, keepalive *networking.Connec
 }
 
 // FIXME: there isn't a way to distinguish between unset values and zero values
-func applyOutlierDetection(c *cluster.Cluster, outlier *networking.OutlierDetection) {
+func applyOutlierDetection(opts buildClusterOpts, outlier *networking.OutlierDetection) {
+	c := opts.mutable.cluster
+	// 没有 DestinationRule 摘除配置时，Gateway 仍要能在 Endpoint 更新前摘掉无法建连的 Pod。
+	// 只在目标 Cluster 上补默认值，Sidecar 维持原行为：不写 outlier_detection。
 	if outlier == nil {
+		if gatewayLocalOriginApplies(opts, c) {
+			applyDefaultGatewayLocalOriginOutlier(c)
+		}
 		return
 	}
 
@@ -586,6 +596,108 @@ func applyOutlierDetection(c *cluster.Cluster, outlier *networking.OutlierDetect
 		}
 		c.CommonLbConfig.HealthyPanicThreshold = &xdstype.Percent{Value: float64(outlier.MinHealthPercent)} // defaults to 50
 	}
+
+	// 已有 outlier 时保留用户的 5xx、间隔、摘除比例和健康阈值。
+	// mt-1.10.6 API 还没有 local-origin 字段；将来字段存在且被显式配置时按其值写入，否则补平台默认。
+	if gatewayLocalOriginApplies(opts, c) {
+		applyGatewayLocalOriginOverlay(c.OutlierDetection, outlier)
+	}
+}
+
+const (
+	// 连续 10 次是全局默认的保守阈值：计数包含建连失败、重置和请求超时，不能区分失联和变慢。
+	defaultConsecutiveLocalOriginFailure uint32 = 10
+	// 10% 是 Envoy 默认上限。小副本仍会至少摘 1 个；大服务不会因为误判摘掉过多主机。
+	defaultMaxEjectionPercent uint32 = 10
+	// 50 是 Envoy 的 healthy_panic_threshold 默认值。显式写入，避免沿用 Istio 对已有 DR 写 0 的行为。
+	defaultHealthyPanicThreshold float64 = 50
+)
+
+// gatewayLocalOriginApplies 限制平台默认摘除的范围：Gateway、出站、非外部服务、Kubernetes 注册、非 SNI DNAT。
+// ORIGINAL_DST 没有可摘的离散主机，不注入。buildDefaultCluster 的中间 Cluster 没有 serviceRegistry，因此不会提前写入。
+func gatewayLocalOriginApplies(opts buildClusterOpts, c *cluster.Cluster) bool {
+	if !features.EnableGatewayLocalOriginOutlier || c == nil {
+		return false
+	}
+	if opts.proxy == nil || opts.proxy.Type != model.Router {
+		return false
+	}
+	if opts.direction == model.TrafficDirectionInbound || opts.meshExternal {
+		return false
+	}
+	if opts.clusterMode == SniDnatClusterMode {
+		return false
+	}
+	if opts.serviceRegistry != string(serviceregistry.Kubernetes) {
+		return false
+	}
+	return c.GetType() != cluster.Cluster_ORIGINAL_DST
+}
+
+// localOriginOutlierConfig 对齐后续 Istio API 的 local-origin 字段。
+// 当前生成代码没有这两个方法，类型断言失败后使用平台默认。
+type localOriginOutlierConfig interface {
+	GetSplitExternalLocalOriginErrors() bool
+	GetConsecutiveLocalOriginFailures() *types.UInt32Value
+}
+
+func applyDefaultGatewayLocalOriginOutlier(c *cluster.Cluster) {
+	c.OutlierDetection = &cluster.OutlierDetection{
+		SplitExternalLocalOriginErrors:         true,
+		ConsecutiveLocalOriginFailure:          &wrappers.UInt32Value{Value: defaultConsecutiveLocalOriginFailure},
+		EnforcingConsecutiveLocalOriginFailure: &wrappers.UInt32Value{Value: 100},
+		// 显式关掉连续 5xx。只写 consecutive_5xx=0 时，旧 Envoy 仍可能按 0 阈值触发，enforcing 也要写 0。
+		Consecutive_5Xx:                 &wrappers.UInt32Value{Value: 0},
+		EnforcingConsecutive_5Xx:        &wrappers.UInt32Value{Value: 0},
+		EnforcingSuccessRate:            &wrappers.UInt32Value{Value: 0},
+		EnforcingLocalOriginSuccessRate: &wrappers.UInt32Value{Value: 0},
+		MaxEjectionPercent:              &wrappers.UInt32Value{Value: defaultMaxEjectionPercent},
+	}
+	if c.CommonLbConfig == nil {
+		c.CommonLbConfig = &cluster.Cluster_CommonLbConfig{}
+	}
+	c.CommonLbConfig.HealthyPanicThreshold = &xdstype.Percent{Value: defaultHealthyPanicThreshold}
+}
+
+func applyGatewayLocalOriginOverlay(out *cluster.OutlierDetection, outlier *networking.OutlierDetection) {
+	if out == nil {
+		return
+	}
+	split, consecutive, configured := configuredLocalOrigin(outlier)
+	if !configured {
+		split = true
+		consecutive = &types.UInt32Value{Value: defaultConsecutiveLocalOriginFailure}
+	} else if consecutive == nil {
+		// 只打开了拆分、没有给阈值时，仍用平台的 10 次，避免退回 Envoy 默认 5 次。
+		consecutive = &types.UInt32Value{Value: defaultConsecutiveLocalOriginFailure}
+	}
+	out.SplitExternalLocalOriginErrors = split
+	value := consecutive.GetValue()
+	out.ConsecutiveLocalOriginFailure = &wrappers.UInt32Value{Value: value}
+	enforcing := uint32(0)
+	if value > 0 {
+		enforcing = 100
+	}
+	out.EnforcingConsecutiveLocalOriginFailure = &wrappers.UInt32Value{Value: enforcing}
+	// split 打开后，local-origin 成功率摘除的 enforcing 默认是 100。平台只做连续故障摘除，必须关掉。
+	out.EnforcingLocalOriginSuccessRate = &wrappers.UInt32Value{Value: 0}
+}
+
+func configuredLocalOrigin(outlier *networking.OutlierDetection) (bool, *types.UInt32Value, bool) {
+	if outlier == nil {
+		return false, nil, false
+	}
+	cfg, ok := interface{}(outlier).(localOriginOutlierConfig)
+	if !ok {
+		return false, nil, false
+	}
+	consecutive := cfg.GetConsecutiveLocalOriginFailures()
+	split := cfg.GetSplitExternalLocalOriginErrors()
+	// bool 无法区分“未设置”和 false。两者都空时视为未配置，继续用平台默认。
+	if !split && consecutive == nil {
+		return false, nil, false
+	}
+	return split, consecutive, true
 }
 
 func applyLoadBalancer(c *cluster.Cluster, lb *networking.LoadBalancerSettings, port *model.Port, proxy *model.Proxy, meshConfig *meshconfig.MeshConfig) {

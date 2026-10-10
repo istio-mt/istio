@@ -43,6 +43,7 @@ import (
 	"istio.io/istio/pilot/pkg/model"
 	"istio.io/istio/pilot/pkg/networking/plugin"
 	"istio.io/istio/pilot/pkg/networking/util"
+	"istio.io/istio/pilot/pkg/serviceregistry"
 	v3 "istio.io/istio/pilot/pkg/xds/v3"
 	"istio.io/istio/pilot/test/xdstest"
 	"istio.io/istio/pkg/config"
@@ -251,6 +252,7 @@ type clusterTest struct {
 	destRule          proto.Message
 	peerAuthn         *authn_beta.PeerAuthentication
 	externalService   bool
+	serviceRegistry   string
 
 	meta         *model.NodeMetadata
 	istioVersion *model.IstioVersion
@@ -287,7 +289,8 @@ func buildTestClusters(c clusterTest) []*cluster.Cluster {
 	}
 
 	serviceAttribute := model.ServiceAttributes{
-		Namespace: TestServiceNamespace,
+		Namespace:       TestServiceNamespace,
+		ServiceRegistry: c.serviceRegistry,
 	}
 	service := &model.Service{
 		Hostname:     host.Name(c.serviceHostname),
@@ -1069,6 +1072,125 @@ func TestApplyOutlierDetection(t *testing.T) {
 			g.Expect(c.OutlierDetection).To(Equal(tt.o))
 		})
 	}
+}
+
+func TestGatewayLocalOriginOutlier(t *testing.T) {
+	g := NewWithT(t)
+	saved := features.EnableGatewayLocalOriginOutlier
+	features.EnableGatewayLocalOriginOutlier = true
+	t.Cleanup(func() {
+		features.EnableGatewayLocalOriginOutlier = saved
+	})
+
+	defaultOutlier := &cluster.OutlierDetection{
+		SplitExternalLocalOriginErrors:         true,
+		ConsecutiveLocalOriginFailure:          &wrappers.UInt32Value{Value: 10},
+		EnforcingConsecutiveLocalOriginFailure: &wrappers.UInt32Value{Value: 100},
+		Consecutive_5Xx:                        &wrappers.UInt32Value{Value: 0},
+		EnforcingConsecutive_5Xx:               &wrappers.UInt32Value{Value: 0},
+		EnforcingSuccessRate:                   &wrappers.UInt32Value{Value: 0},
+		EnforcingLocalOriginSuccessRate:        &wrappers.UInt32Value{Value: 0},
+		MaxEjectionPercent:                     &wrappers.UInt32Value{Value: 10},
+	}
+
+	t.Run("gateway kubernetes service without outlier uses platform defaults", func(t *testing.T) {
+		c := gatewayCluster(t, string(serviceregistry.Kubernetes), false, nil)
+		g.Expect(c.OutlierDetection).To(Equal(defaultOutlier))
+		g.Expect(c.CommonLbConfig.GetHealthyPanicThreshold().GetValue()).To(Equal(float64(50)))
+	})
+
+	t.Run("existing outlier keeps its fields and adds local origin defaults", func(t *testing.T) {
+		c := gatewayCluster(t, string(serviceregistry.Kubernetes), false, &networking.OutlierDetection{
+			Consecutive_5XxErrors:    &types.UInt32Value{Value: 4},
+			ConsecutiveGatewayErrors: &types.UInt32Value{Value: 3},
+			Interval:                 &types.Duration{Seconds: 5},
+			BaseEjectionTime:         &types.Duration{Seconds: 15},
+			MaxEjectionPercent:       20,
+			MinHealthPercent:         10,
+		})
+		g.Expect(c.OutlierDetection).To(Equal(&cluster.OutlierDetection{
+			SplitExternalLocalOriginErrors:         true,
+			ConsecutiveLocalOriginFailure:          &wrappers.UInt32Value{Value: 10},
+			EnforcingConsecutiveLocalOriginFailure: &wrappers.UInt32Value{Value: 100},
+			Consecutive_5Xx:                        &wrappers.UInt32Value{Value: 4},
+			EnforcingConsecutive_5Xx:               &wrappers.UInt32Value{Value: 100},
+			ConsecutiveGatewayFailure:              &wrappers.UInt32Value{Value: 3},
+			EnforcingConsecutiveGatewayFailure:     &wrappers.UInt32Value{Value: 100},
+			EnforcingSuccessRate:                   &wrappers.UInt32Value{Value: 0},
+			EnforcingLocalOriginSuccessRate:        &wrappers.UInt32Value{Value: 0},
+			Interval:                               durationpb.New(5 * time.Second),
+			BaseEjectionTime:                       durationpb.New(15 * time.Second),
+			MaxEjectionPercent:                     &wrappers.UInt32Value{Value: 20},
+		}))
+		g.Expect(c.CommonLbConfig.GetHealthyPanicThreshold().GetValue()).To(Equal(float64(10)))
+	})
+
+	t.Run("empty outlier object does not inherit nil-only defaults", func(t *testing.T) {
+		c := gatewayCluster(t, string(serviceregistry.Kubernetes), false, &networking.OutlierDetection{})
+		g.Expect(c.OutlierDetection).To(Equal(&cluster.OutlierDetection{
+			SplitExternalLocalOriginErrors:         true,
+			ConsecutiveLocalOriginFailure:          &wrappers.UInt32Value{Value: 10},
+			EnforcingConsecutiveLocalOriginFailure: &wrappers.UInt32Value{Value: 100},
+			EnforcingSuccessRate:                   &wrappers.UInt32Value{Value: 0},
+			EnforcingLocalOriginSuccessRate:        &wrappers.UInt32Value{Value: 0},
+		}))
+		g.Expect(c.CommonLbConfig.GetHealthyPanicThreshold().GetValue()).To(Equal(float64(0)))
+	})
+
+	t.Run("subset without its own outlier uses the same default", func(t *testing.T) {
+		clusters := buildTestClusters(clusterTest{
+			t: t, serviceHostname: "*.example.org", serviceResolution: model.ClientSideLB, nodeType: model.Router,
+			locality: &core.Locality{}, mesh: testMesh, serviceRegistry: string(serviceregistry.Kubernetes),
+			destRule: &networking.DestinationRule{
+				Host: "*.example.org",
+				Subsets: []*networking.Subset{{
+					Name:   "stable",
+					Labels: map[string]string{"version": "v1"},
+				}},
+			},
+		})
+		c := xdstest.ExtractCluster("outbound|8080|stable|*.example.org", clusters)
+		g.Expect(c.OutlierDetection).To(Equal(defaultOutlier))
+		g.Expect(c.CommonLbConfig.GetHealthyPanicThreshold().GetValue()).To(Equal(float64(50)))
+	})
+
+	t.Run("sidecar kubernetes service is unchanged", func(t *testing.T) {
+		c := xdstest.ExtractCluster("outbound|8080||*.example.org", buildTestClusters(clusterTest{
+			t: t, serviceHostname: "*.example.org", serviceResolution: model.ClientSideLB, nodeType: model.SidecarProxy,
+			locality: &core.Locality{}, mesh: testMesh, serviceRegistry: string(serviceregistry.Kubernetes),
+		}))
+		g.Expect(c.OutlierDetection).To(BeNil())
+	})
+
+	t.Run("external and non-kubernetes services are unchanged", func(t *testing.T) {
+		external := gatewayCluster(t, string(serviceregistry.Kubernetes), true, nil)
+		g.Expect(external.OutlierDetection).To(BeNil())
+		other := gatewayCluster(t, string(serviceregistry.External), false, nil)
+		g.Expect(other.OutlierDetection).To(BeNil())
+	})
+
+	t.Run("flag disables the platform default", func(t *testing.T) {
+		features.EnableGatewayLocalOriginOutlier = false
+		c := gatewayCluster(t, string(serviceregistry.Kubernetes), false, nil)
+		g.Expect(c.OutlierDetection).To(BeNil())
+		features.EnableGatewayLocalOriginOutlier = true
+	})
+}
+
+func gatewayCluster(t *testing.T, registry string, external bool, outlier *networking.OutlierDetection) *cluster.Cluster {
+	t.Helper()
+	var policy *networking.TrafficPolicy
+	if outlier != nil {
+		policy = &networking.TrafficPolicy{OutlierDetection: outlier}
+	}
+	return xdstest.ExtractCluster("outbound|8080||*.example.org", buildTestClusters(clusterTest{
+		t: t, serviceHostname: "*.example.org", serviceResolution: model.ClientSideLB, nodeType: model.Router,
+		locality: &core.Locality{}, mesh: testMesh, serviceRegistry: registry, externalService: external,
+		destRule: &networking.DestinationRule{
+			Host:          "*.example.org",
+			TrafficPolicy: policy,
+		},
+	}))
 }
 
 func TestStatNamePattern(t *testing.T) {
