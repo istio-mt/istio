@@ -426,11 +426,11 @@ var (
 			"before any processing of request by HTTP filters or routing.").Get()
 
 	// Gateway 在业务 Pod 没有 Sidecar 时，节点失联到 Endpoint 更新前仍会选中失联 Pod。
-	// 默认只给 Gateway 的集群内 Kubernetes 上游打开 local-origin 连续故障摘除，可用环境变量按 revision 关闭。
+	// 默认给 Gateway 的网格内上游打开 local-origin 连续故障摘除，不区分 ServiceRegistry，可用环境变量按 revision 关闭。
 	EnableGatewayLocalOriginOutlier = env.RegisterBoolVar(
 		"PILOT_ENABLE_GATEWAY_LOCAL_ORIGIN_OUTLIER",
 		true,
-		"If enabled, istiod adds a conservative local-origin outlier policy to Gateway clusters for in-mesh Kubernetes services. "+
+		"If enabled, istiod adds a conservative local-origin outlier policy to Gateway clusters for in-mesh services. "+
 			"Existing DestinationRule fields are preserved. Set false to keep the stock Istio 1.10 rendering.",
 	).Get()
 

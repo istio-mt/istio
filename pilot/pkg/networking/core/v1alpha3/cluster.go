@@ -491,9 +491,9 @@ type buildClusterOpts struct {
 	proxy           *model.Proxy
 	meshExternal    bool
 	serviceMTLSMode model.MutualTLSMode
-	// serviceRegistry 是 Service 的注册来源。Gateway 默认摘除只作用于 Kubernetes Service，
-	// 避免把 ServiceEntry 等外部或自定义来源一并纳入。
-	serviceRegistry string
+	// applyGatewayLocalOrigin 只在 applyDestinationRule 的最终 Cluster 上打开。
+	// buildDefaultCluster 会先渲染一次，SNI DNAT 也会走那次渲染；提前写入后第二次不会清掉。
+	applyGatewayLocalOrigin bool
 }
 
 type upgradeTuple struct {
@@ -613,10 +613,10 @@ const (
 	defaultHealthyPanicThreshold float64 = 50
 )
 
-// gatewayLocalOriginApplies 限制平台默认摘除的范围：Gateway、出站、非外部服务、Kubernetes 注册、非 SNI DNAT。
-// ORIGINAL_DST 没有可摘的离散主机，不注入。buildDefaultCluster 的中间 Cluster 没有 serviceRegistry，因此不会提前写入。
+// gatewayLocalOriginApplies 限制平台默认摘除的范围：Gateway、出站、非外部服务、非 SNI DNAT。
+// 不按 ServiceRegistry 过滤。ORIGINAL_DST 没有可摘的离散主机，不注入。
 func gatewayLocalOriginApplies(opts buildClusterOpts, c *cluster.Cluster) bool {
-	if !features.EnableGatewayLocalOriginOutlier || c == nil {
+	if !features.EnableGatewayLocalOriginOutlier || !opts.applyGatewayLocalOrigin || c == nil {
 		return false
 	}
 	if opts.proxy == nil || opts.proxy.Type != model.Router {
@@ -626,9 +626,6 @@ func gatewayLocalOriginApplies(opts buildClusterOpts, c *cluster.Cluster) bool {
 		return false
 	}
 	if opts.clusterMode == SniDnatClusterMode {
-		return false
-	}
-	if opts.serviceRegistry != string(serviceregistry.Kubernetes) {
 		return false
 	}
 	return c.GetType() != cluster.Cluster_ORIGINAL_DST

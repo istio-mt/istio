@@ -125,14 +125,14 @@ func (cb *ClusterBuilder) applyDestinationRule(mc *MutableCluster, clusterMode C
 	destinationRule := castDestinationRuleOrDefault(destRule)
 
 	opts := buildClusterOpts{
-		mesh:            cb.push.Mesh,
-		mutable:         mc,
-		policy:          destinationRule.TrafficPolicy,
-		port:            port,
-		clusterMode:     clusterMode,
-		direction:       model.TrafficDirectionOutbound,
-		proxy:           cb.proxy,
-		serviceRegistry: service.Attributes.ServiceRegistry,
+		mesh:                    cb.push.Mesh,
+		mutable:                 mc,
+		policy:                  destinationRule.TrafficPolicy,
+		port:                    port,
+		clusterMode:             clusterMode,
+		direction:               model.TrafficDirectionOutbound,
+		proxy:                   cb.proxy,
+		applyGatewayLocalOrigin: true,
 	}
 
 	if clusterMode == DefaultClusterMode {
